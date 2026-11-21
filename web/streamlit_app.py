@@ -29,7 +29,14 @@ DISCLAIMER = (
 )
 HORIZON_LABEL = {1: "next day", 5: "1 week (5 trading days)", 20: "1 month (20 trading days)", 60: "3 months (60 trading days)"}
 
-st.set_page_config(page_title="ThePatternHistory", page_icon="📈", layout="wide")
+ASSETS = Path(__file__).resolve().parent / "assets"
+st.set_page_config(page_title="ThePatternHistory", page_icon=str(ASSETS / "icon.png"), layout="wide")
+
+
+def _b64(name: str) -> str:
+    import base64
+
+    return base64.b64encode((ASSETS / name).read_bytes()).decode()
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=200)
@@ -76,7 +83,14 @@ def method_text(ticker: str, horizon: int, o: dict) -> str:
 
 
 # ── Header and inputs ───────────────────────────────────────────────────────
-st.markdown("<h1 style='font-size:clamp(1.8rem,7vw,2.75rem);margin-bottom:0'>ThePatternHistory</h1>", unsafe_allow_html=True)
+st.markdown(
+    f"""<picture>
+      <source media="(prefers-color-scheme: dark)" srcset="data:image/png;base64,{_b64('logo-dark.png')}">
+      <img src="data:image/png;base64,{_b64('logo.png')}" alt="ThePatternHistory"
+           style="width:min(420px,85vw);height:auto;margin:0 0 0.5rem -8px;border-radius:12px">
+    </picture>""",
+    unsafe_allow_html=True,
+)
 st.caption("Pick a market, type a ticker or company name, and see what our pattern rules say today, "
            "backed by every time the same pattern appeared in the past.")
 
