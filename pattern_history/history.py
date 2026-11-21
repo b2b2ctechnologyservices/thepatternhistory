@@ -97,7 +97,7 @@ def replay(df: pd.DataFrame, min_confidence: int = rules.MIN_FACTORS) -> pd.Data
     Returns one row per (date, firing pattern) with entry price, direction,
     confidence, factors and forward returns over HORIZONS trading days.
     """
-    cols = ["date", "pattern", "direction", "confidence", "close", "factors"] + [f"ret_{h}d" for h in HORIZONS]
+    cols = ["date", "rule", "pattern", "direction", "confidence", "close", "factors"] + [f"ret_{h}d" for h in HORIZONS]
     if len(df) < rules.MIN_BARS:
         return pd.DataFrame(columns=cols)
 
@@ -120,6 +120,7 @@ def _rows_for_bar(d, i, window, closes, n, min_confidence) -> list[dict]:
     for c in candidates_on_bar(window, min_confidence):
         row = {
             "date": d.index[i],
+            "rule": c["detector"],
             "pattern": c["pattern"],
             "direction": c["direction"],
             "confidence": c["confidence"],
@@ -173,3 +174,33 @@ def rule_stats(occurrences: pd.DataFrame, direction: str) -> list[HorizonStats]:
             )
         )
     return stats
+
+
+def outlook(hist: pd.DataFrame, last_date, horizon: int) -> dict:
+    """
+    Bullish / bearish / unknown outlook for the latest bar.
+
+    If no rule is confirmed on the latest bar the outlook is "unknown".
+    Otherwise: take every PAST day on which any of today's firing patterns also
+    fired (each day counted once even if several fired), and compare the close
+    with the close `horizon` trading days later. Bullish % = share of those days
+    where price was higher, bearish % = share where it was lower (unchanged
+    days count toward neither).
+    """
+    today = hist[hist["date"] == last_date]
+    patterns = sorted(set(today["pattern"]))
+    if not patterns:
+        return {"status": "unknown", "patterns": [], "sample": 0,
+                "bullish": float("nan"), "bearish": float("nan"), "horizon": horizon}
+    col = f"ret_{horizon}d"
+    past = hist[(hist["pattern"].isin(patterns)) & (hist["date"] < last_date)].dropna(subset=[col])
+    by_day = past.groupby("date")[col].first()  # same day -> same price outcome
+    n = int(len(by_day))
+    return {
+        "status": "pattern" if n else "no_history",
+        "patterns": patterns,
+        "sample": n,
+        "bullish": float((by_day > 0).mean()) if n else float("nan"),
+        "bearish": float((by_day < 0).mean()) if n else float("nan"),
+        "horizon": horizon,
+    }

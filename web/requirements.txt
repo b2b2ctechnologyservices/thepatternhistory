@@ -5,3 +5,4 @@ pandas>=2.0
 numpy>=1.26
 pyarrow>=14
 altair>=5
+openpyxl>=3.1

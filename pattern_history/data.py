@@ -40,17 +40,51 @@ def _cache_path(ticker: str) -> Path:
     return CACHE_DIR / f"{safe}.parquet"
 
 
-def _download(ticker: str) -> pd.DataFrame:
-    import yfinance as yf
+class ProviderBusy(DataError):
+    """Yahoo Finance refused or dropped the request (rate limit / network)."""
 
-    raw = yf.download(
-        ticker,
-        period="max",
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-        threads=False,
-    )
+
+_TRANSIENT = ("rate limit", "too many requests", "timed out", "timeout", "connection", "curl", "429", "503")
+
+
+def _download(ticker: str, attempts: int = 3) -> pd.DataFrame:
+    """
+    Download full daily history. yf.download() swallows errors and returns an
+    empty frame, so check yfinance's error log to tell "no such ticker" apart
+    from "Yahoo is busy" (common on shared hosts like Streamlit Cloud), and
+    retry the busy case with backoff.
+    """
+    import time
+
+    import yfinance as yf
+    import yfinance.shared as yf_shared
+
+    raw, last_err = None, ""
+    for attempt in range(attempts):
+        try:
+            raw = yf.download(
+                ticker,
+                period="max",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+            last_err = str(getattr(yf_shared, "_ERRORS", {}).get(ticker, ""))
+        except Exception as e:  # newer yfinance may raise instead
+            raw, last_err = None, f"{type(e).__name__}: {e}"
+        if raw is not None and not raw.empty:
+            break
+        if not any(k in last_err.lower() for k in _TRANSIENT) and "RateLimit" not in last_err:
+            break  # a real "not found": retrying won't help
+        if attempt < attempts - 1:
+            time.sleep(2 * (attempt + 1))
+    else:
+        raise ProviderBusy(
+            f"Yahoo Finance is busy right now and didn't send data for {ticker}. "
+            "Please try again in a minute."
+        )
+
     if raw is None or raw.empty:
         return pd.DataFrame()
     if isinstance(raw.columns, pd.MultiIndex):
@@ -98,3 +132,72 @@ def load_daily(ticker: str, years: int = 25, use_cache: bool = True) -> pd.DataF
         cutoff = df.index[-1] - pd.DateOffset(years=years)
         df = df[df.index >= cutoff]
     return df
+
+
+# ── Markets and company-name search ─────────────────────────────────────────
+
+MARKETS = {
+    "US": {"label": "🇺🇸 US", "exchanges": {"NMS", "NYQ", "NGM", "NCM", "ASE", "PCX", "BTS", "NAS", "NYS"}, "suffix": ""},
+    "India": {"label": "🇮🇳 India (NSE)", "exchanges": {"NSI"}, "suffix": ".NS"},
+}
+
+
+def search_symbols(query: str, market: str, limit: int = 8) -> list[dict]:
+    """Yahoo Finance search, filtered to stocks/ETFs on the chosen market."""
+    import yfinance as yf
+
+    exchanges = MARKETS[market]["exchanges"]
+    try:
+        quotes = yf.Search(query, max_results=20).quotes
+    except Exception:
+        return []
+    out = []
+    for q in quotes:
+        if q.get("exchange") in exchanges and q.get("quoteType") in {"EQUITY", "ETF"}:
+            out.append({
+                "symbol": q["symbol"],
+                "name": q.get("longname") or q.get("shortname") or q["symbol"],
+            })
+    return out[:limit]
+
+
+def _has_recent_prices(symbol: str) -> bool:
+    try:
+        import yfinance as yf
+
+        return not yf.Ticker(symbol).history(period="5d", auto_adjust=True).empty
+    except Exception:
+        return False
+
+
+def resolve(query: str, market: str) -> tuple[list[dict], int]:
+    """
+    Turn what the user typed (ticker or company name) into candidate symbols
+    for the chosen market. Returns (candidates, index of the best match).
+    """
+    q = (query or "").strip()
+    if not q:
+        return [], 0
+    suffix = MARKETS[market]["suffix"]
+    guess = q.upper().replace(" ", "")
+    if suffix and not guess.endswith(suffix):
+        guess = guess.split(".")[0] + suffix
+    try:
+        guess = normalize_ticker(guess)
+    except DataError:
+        guess = None
+    matches = search_symbols(q, market)
+    for i, m in enumerate(matches):
+        if guess and m["symbol"].upper() == guess:
+            return matches, i
+    if guess and market == "US" and guess.endswith((".NS", ".BO")):
+        guess = None  # an Indian symbol typed while US is selected: don't load it as US
+    if guess and " " not in q and len(q) <= 12:
+        # Also offer exactly what was typed, as a ticker (first if search found nothing).
+        typed = {"symbol": guess, "name": f"{guess} (as typed)"}
+        if not matches:
+            return [typed], 0
+        if _has_recent_prices(guess):
+            return [typed] + matches, 0
+        return matches + [typed], 0
+    return matches, 0
