@@ -190,6 +190,8 @@ def resolve(query: str, market: str) -> tuple[list[dict], int]:
     for i, m in enumerate(matches):
         if guess and m["symbol"].upper() == guess:
             return matches, i
+    if guess and market == "US" and guess.endswith((".NS", ".BO")):
+        guess = None  # an Indian symbol typed while US is selected: don't load it as US
     if guess and " " not in q and len(q) <= 12:
         # Also offer exactly what was typed, as a ticker (first if search found nothing).
         typed = {"symbol": guess, "name": f"{guess} (as typed)"}
