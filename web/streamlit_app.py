@@ -20,6 +20,7 @@ import streamlit as st
 
 from pattern_history.catalog import RULE_DESC, RULE_NAME, RULES
 from pattern_history.data import MARKETS, DataError, ProviderBusy, load_daily, resolve
+from pattern_history import v3
 from pattern_history.history import HORIZONS, directional, outlook, replay, rule_stats
 
 SMALL_SAMPLE = 10
@@ -42,7 +43,7 @@ def _b64(name: str) -> str:
 @st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=200)
 def get_history(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     prices = load_daily(ticker, years=25)
-    return prices, replay(prices)
+    return prices, v3.annotate(prices, replay(prices))
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=500)
@@ -62,15 +63,23 @@ def friendly(pattern: str) -> str:
     return pattern.replace("_", " ").title().replace("Ma", "MA")
 
 
-def method_text(ticker: str, horizon: int, o: dict) -> str:
+RULESET_NOTE = {
+    "Original": "Rule set: Original (your bot's rules exactly as coded: a pattern counts when at least 2 of its "
+                "signs agree).",
+    "Version 3": "Rule set: Version 3 (a pattern counts only if it is at a location — a major moving average, a bow "
+                 "tie, or a flag/wedge zone — AND has at least one supporting factor — round number, narrow body, "
+                 "inside bar or wide-range bar — AND the weekly trend does not point the other way).",
+}
+
+
+def method_text(ticker: str, horizon: int, o: dict, ruleset: str = "Original") -> str:
+    note = " " + RULESET_NOTE[ruleset]
     if o["status"] == "unknown":
         return (
             f"None of our 10 rules is confirmed on {ticker}'s latest daily bar, so there is no pattern "
-            "to look up in history and the outlook is Unknown. (A rule is 'confirmed' only when its "
-            "pattern is present AND at least 2 supporting signs agree, e.g. trend direction, "
-            "above-average volume, a quiet narrow candle, or price near a round number.)"
+            "to look up in history and the outlook is Unknown." + note
         )
-    return (
+    return note.strip() + " " + (
         f"Step 1: today these rule(s) are confirmed on {ticker}: {', '.join(friendly(p) for p in o['patterns'])}. "
         f"Step 2: we went back through ~25 years of {ticker}'s daily prices and found every past trading day "
         f"when the same pattern(s) were confirmed, using only data available up to that day "
@@ -161,6 +170,14 @@ st.subheader(f"{company} ({ticker})")
 st.caption(f"Last close {currency}{last_close:,.2f} on {last_date:%d %b %Y} · {len(prices):,} daily bars since "
            f"{prices.index[0]:%b %Y} (split/dividend-adjusted, Yahoo Finance)")
 
+ruleset = st.segmented_control(
+    "Rule set", ["Original", "Version 3"], default="Original", key="ruleset",
+    help="Original = your bot's rules exactly as coded. Version 3 = the same patterns, but only when they "
+         "happen at a real location with a supporting factor and the weekly trend agrees (from your V3 spec).",
+) or "Original"
+hist_all = hist
+hist = hist_all if ruleset == "Original" else hist_all[hist_all["v3_pass"]]
+today_all = hist_all[hist_all["date"] == last_date]
 today = hist[hist["date"] == last_date]
 firing = list(dict.fromkeys(today["pattern"]))
 
@@ -171,7 +188,7 @@ horizon = st.segmented_control(
     key="horizon",
 ) or 20
 o = outlook(hist, last_date, horizon)
-tip = method_text(ticker, horizon, o)
+tip = method_text(ticker, horizon, o, ruleset)
 
 m1, m2, m3 = st.columns(3)
 if o["status"] == "unknown":
@@ -191,43 +208,66 @@ else:
 with st.expander("How is this calculated?"):
     st.write(tip)
 
+side = []
+for name, hs in (("Original", hist_all), ("Version 3", hist_all[hist_all["v3_pass"]])):
+    oo = outlook(hs, last_date, horizon)
+    side.append({
+        "Rule set": name,
+        "Confirmed today": ", ".join(friendly(p) for p in oo["patterns"]) or "None → Unknown",
+        "Bullish": share(oo["bullish"]), "Bearish": share(oo["bearish"]), "Past cases": oo["sample"],
+    })
+st.markdown("**Side by side**")
+st.dataframe(pd.DataFrame(side), hide_index=True, width="stretch")
+
 # ── What the bot checked ────────────────────────────────────────────────────
 st.markdown("#### What our bot checked today")
 rows = []
 for key, name, desc in RULES:
-    fired_today = today[today["rule"] == key]
-    past_rule = hist[(hist["rule"] == key) & (hist["date"] < last_date)]
+    fired_today = today_all[today_all["rule"] == key]
+    past_orig = hist_all[(hist_all["rule"] == key) & (hist_all["date"] < last_date)]
     if fired_today.empty:
-        status = "— Not confirmed"
+        status, status_v3 = "— Not confirmed", "— Not confirmed"
     else:
         dirs = sorted(set(fired_today["direction"]))
         status = " / ".join("✅ Bullish" if d == "LONG" else "✅ Bearish" for d in dirs)
         status += " — " + ", ".join(friendly(p) for p in fired_today["pattern"])
-    rows.append({"Rule": name, "Today": status, "Times seen in 25 yrs": len(past_rule), "What it looks for": desc})
+        parts = []
+        for _, r in fired_today.iterrows():
+            if r["v3_pass"]:
+                parts.append(f"✅ passes ({r['v3_location']}; {r['v3_support']})")
+            else:
+                parts.append("✗ filtered out: " + v3.why_not(r))
+        status_v3 = " / ".join(parts)
+    rows.append({"Rule": name, "Original": status, "Version 3": status_v3,
+                 "Seen in 25 yrs (Original / V3)": f"{len(past_orig)} / {int(past_orig['v3_pass'].sum())}",
+                 "What it looks for": desc})
 checked = pd.DataFrame(rows)
 st.dataframe(
     checked, hide_index=True, width="stretch",
     column_config={"What it looks for": st.column_config.TextColumn(width="large")},
 )
-st.caption(f"{len(firing)} of 10 rules confirmed on the latest bar. A rule counts only when its pattern is present "
-           "and at least 2 supporting signs agree.")
+st.caption(f"Original: {today_all['rule'].nunique()} of 10 rules confirmed on the latest bar. "
+           f"Version 3: {today_all[today_all['v3_pass']]['rule'].nunique()} of 10. "
+           f"Weekly trend (completed weeks): {v3.weekly_trend_by_day(prices).iloc[-1]}.")
 
 # ── Excel download ──────────────────────────────────────────────────────────
-evidence = hist[hist["pattern"].isin(firing)] if firing else hist
+fired_any = list(dict.fromkeys(today_all["pattern"]))
+evidence = hist_all[hist_all["pattern"].isin(fired_any)] if fired_any else hist_all
 evidence = evidence.copy()
 evidence.insert(0, "ticker", ticker)
 evidence["rule"] = evidence["rule"].map(RULE_NAME)
 evidence["date"] = evidence["date"].dt.strftime("%Y-%m-%d")
 summary_rows = []
-for h in HORIZONS:
-    oh = outlook(hist, last_date, h)
+for h, rs in [(h, rs) for rs in ("Original", "Version 3") for h in HORIZONS]:
+    oh = outlook(hist_all if rs == "Original" else hist_all[hist_all["v3_pass"]], last_date, h)
     summary_rows.append({
+        "Rule set": rs,
         "Horizon": HORIZON_LABEL[h],
         "Outlook": "Unknown (no pattern confirmed)" if oh["status"] == "unknown" else "From past cases",
         "Bullish %": None if pd.isna(oh["bullish"]) else round(oh["bullish"] * 100, 1),
         "Bearish %": None if pd.isna(oh["bearish"]) else round(oh["bearish"] * 100, 1),
         "Past cases": oh["sample"],
-        "How it is calculated": method_text(ticker, h, oh),
+        "How it is calculated": method_text(ticker, h, oh, rs),
     })
 buf = io.BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as xw:
