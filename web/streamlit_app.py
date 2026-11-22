@@ -15,6 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root: rules.py, pattern_history/
 
+# Streamlit Cloud pulls new code into the running process without restarting it, so
+# modules imported by an older version stay cached and new names fail to import.
+# Drop our own modules on each run so the current files are always used.
+for _mod in [m for m in sys.modules if m == "rules" or m == "pattern_history" or m.startswith("pattern_history.")]:
+    del sys.modules[_mod]
+
 import altair as alt
 import pandas as pd
 import streamlit as st
