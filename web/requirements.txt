@@ -1,5 +1,5 @@
 # ThePatternHistory website only (Streamlit Community Cloud reads this file).
-streamlit>=1.50
+streamlit>=1.67
 yfinance>=0.2.54
 pandas>=2.0
 numpy>=1.26

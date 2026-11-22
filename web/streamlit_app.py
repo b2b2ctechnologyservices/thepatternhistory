@@ -21,6 +21,7 @@ import streamlit as st
 from pattern_history.catalog import RULE_DESC, RULE_NAME, RULES
 from pattern_history.data import MARKETS, DataError, ProviderBusy, load_daily, resolve
 from pattern_history import v3
+from pattern_history.factors import split as split_factors
 from pattern_history.plan import MIN_R, todays_plans
 from pattern_history.history import HORIZONS, directional, outlook, replay, rule_stats
 
@@ -325,7 +326,9 @@ for pattern in firing:
     st.divider()
     st.markdown(f"### {RULE_NAME[rule_key]}: {friendly(pattern)} ({arrow})")
     st.caption(RULE_DESC[rule_key])
-    st.caption("Supporting signs today: " + today[today["pattern"] == pattern]["factors"].iloc[0])
+    own, indep = split_factors(pattern, today[today["pattern"] == pattern]["factors"].iloc[0])
+    st.caption(f"**Supporting signs today ({len(indep)}):** " + (", ".join(indep) or "none")
+               + "  \n**Part of the pattern itself:** " + (", ".join(own) or "none"))
     pl = plan_by_pattern.get(pattern)
     if pl:
         st.markdown("**Trade plan (from your bot's code)**")
@@ -334,7 +337,11 @@ for pattern in firing:
         c2.metric("Stop", f"{pl['stop']:,.2f}")
         c3.metric("Target", f"{pl['target']:,.2f}")
         c4.metric("Reward:risk", f"{pl['r']:.2f}×", help=f"Your bot required at least {MIN_R}×.")
-        c5.metric("Confidence", f"{pl['confidence']}/5", help="Number of distinct factors, capped at 5.")
+        own_n, ind_n = (len(x) for x in split_factors(pattern, pl["factors"]))
+        c5.metric("Confidence", f"{pl['confidence']}/5",
+                  delta=f"{ind_n} independent sign{'s' if ind_n != 1 else ''}", delta_color="off", delta_arrow="off",
+                  help=(f"Your bot counts every distinct label, capped at 5. {own_n} of them describe "
+                        f"the pattern itself, so {ind_n} are separate supporting signs."))
         msg = f"**{pl['decision']}**: {pl['reason']}" + (" · bot's top pick" if pl["top_pick"] else "")
         (st.success if pl["decision"] == "TAKE" else st.warning if pl["decision"] == "SKIP" else st.info)(msg)
 
