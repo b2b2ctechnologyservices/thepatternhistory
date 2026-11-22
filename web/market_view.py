@@ -51,8 +51,7 @@ def render(esc, tip, footer, pick_stock) -> None:
         return
 
     day = pd.Timestamp(meta["trading_day"])
-    caps = df.drop_duplicates("symbol").sort_values("market_cap", ascending=False, na_position="last")
-    rank = {s: i + 1 for i, s in enumerate(caps["symbol"])}
+    rank = dict(zip(df["symbol"], df["size_rank"]))  # rank in the whole NSE market, from the scan
     df["Size"] = [_size(rank[s]) for s in df["symbol"]]
     pats = df[df["pattern"] != ""]
     n_pat, n_vol = pats["symbol"].nunique(), df.loc[df["volume_x"] >= VOLUME_SHOCK, "symbol"].nunique()

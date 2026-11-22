@@ -45,6 +45,9 @@ def main() -> None:
     print(f"{len(uni)} NSE stocks", flush=True)
     names = dict(zip(uni["symbol"], uni["name"]))
     caps = dict(zip(uni["symbol"], uni["market_cap"]))
+    # Rank by market value across the WHOLE market (the list only keeps flagged stocks).
+    by_cap = uni.sort_values("market_cap", ascending=False, na_position="last")
+    size_rank = {s: i + 1 for i, s in enumerate(by_cap["symbol"])}
 
     rows, got, latest = [], 0, {}
     with ProcessPoolExecutor(a.workers) as pool:
@@ -66,6 +69,7 @@ def main() -> None:
         out = out[out["date"] == day.strftime("%Y-%m-%d")]
         out.insert(1, "name", out["symbol"].map(names))
         out.insert(2, "market_cap", out["symbol"].map(caps))
+        out.insert(3, "size_rank", out["symbol"].map(size_rank))
     OUT.mkdir(exist_ok=True)
     out.to_csv(OUT / "india_latest.csv", index=False)
     meta = {"market": "India", "trading_day": day.strftime("%Y-%m-%d") if day is not None else None,
