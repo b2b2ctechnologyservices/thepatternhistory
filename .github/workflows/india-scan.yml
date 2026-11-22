@@ -1,0 +1,38 @@
+# Once a day after the NSE close: check every NSE stock's latest daily bar and
+# publish the list to the `scan-data` branch, which the website reads.
+name: India daily scan
+
+on:
+  schedule:
+    - cron: "30 11 * * 1-5"   # 11:30 UTC = 5:00 PM IST, Mon-Fri
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: india-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/requirements.txt
+      - run: pip install -r web/requirements.txt
+      - run: python scan/run_india.py --workers 4
+      - name: Publish to scan-data branch
+        run: |
+          cd scan/out
+          git init -q -b scan-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add india_latest.csv india_meta.json
+          git commit -q -m "India scan $(jq -r .trading_day india_meta.json)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" scan-data

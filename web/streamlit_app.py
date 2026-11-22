@@ -35,6 +35,10 @@ from pattern_history.history import directional, outlook, rule_stats
 from pattern_history.multi import DAILY_YEARS, scan_all
 from pattern_history.timeframes import TIMEFRAMES
 
+sys.modules.pop("market_view", None)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import market_view  # noqa: E402
+
 SMALL_SAMPLE = 10
 DISCLAIMER = (
     "Historical statistics for education only. Not investment advice, and not a recommendation to buy or "
@@ -364,6 +368,25 @@ st.markdown(f"<style>:root{{--acc:{acc};--acc2:{acc2};--tint:{tint};--wash:{wash
 
 if submitted and query.strip():
     st.session_state["query"] = (query.strip(), market)
+    st.session_state["india_mode"] = "one"
+
+
+def pick_stock(symbol: str) -> None:
+    """Open one stock from the all-stocks list."""
+    st.session_state["query"] = (symbol, "India")
+    st.session_state["india_mode"] = "one"
+
+
+if market == "India":
+    st.session_state.setdefault("india_mode", "one")
+    with st.container(key="modebar"):
+        mode = st.segmented_control(
+            "View", ["one", "all"], key="india_mode", label_visibility="collapsed",
+            on_change=lambda: st.session_state.update(india_mode=st.session_state.get("india_mode") or "one"),
+            format_func=lambda m: "Look up one stock" if m == "one" else "All NSE stocks today") or "one"
+    if mode == "all":
+        market_view.render(esc, tip, footer, pick_stock)
+        st.stop()
 
 q, q_market = st.session_state.get("query", ("", market))
 if not market or not q or q_market != market:
