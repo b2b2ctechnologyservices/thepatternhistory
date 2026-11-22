@@ -21,6 +21,7 @@ import streamlit as st
 from pattern_history.catalog import RULE_DESC, RULE_NAME, RULES
 from pattern_history.data import MARKETS, DataError, ProviderBusy, load_daily, resolve
 from pattern_history import v3
+from pattern_history.plan import MIN_R, todays_plans
 from pattern_history.history import HORIZONS, directional, outlook, replay, rule_stats
 
 SMALL_SAMPLE = 10
@@ -44,6 +45,11 @@ def _b64(name: str) -> str:
 def get_history(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     prices = load_daily(ticker, years=25)
     return prices, v3.annotate(prices, replay(prices))
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=200)
+def get_plans(ticker: str, _prices: pd.DataFrame, last_date) -> tuple[dict, list[dict]]:
+    return todays_plans(ticker, _prices)
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=500)
@@ -76,7 +82,7 @@ def method_text(ticker: str, horizon: int, o: dict, ruleset: str = "Original") -
     note = " " + RULESET_NOTE[ruleset]
     if o["status"] == "unknown":
         return (
-            f"None of our 10 rules is confirmed on {ticker}'s latest daily bar, so there is no pattern "
+            f"None of our 10 rules is confirmed on {ticker}'s latest daily bar under this rule set, so there is no pattern "
             "to look up in history and the outlook is Unknown." + note
         )
     return note.strip() + " " + (
@@ -170,6 +176,22 @@ st.subheader(f"{company} ({ticker})")
 st.caption(f"Last close {currency}{last_close:,.2f} on {last_date:%d %b %Y} · {len(prices):,} daily bars since "
            f"{prices.index[0]:%b %Y} (split/dividend-adjusted, Yahoo Finance)")
 
+context, plans = get_plans(ticker, prices, last_date)
+plan_by_pattern = {p["pattern"]: p for p in plans}
+st.markdown(f"**Your bot's read today:** trend **{context['trend']}** · technical position "
+            f"**{context['technical']}** · bow tie **{context['bow_tie']}**")
+if not plans:
+    st.markdown("**Your bot's decision today:** no setup, so no trade.")
+else:
+    top = plans[0]
+    if top["decision"] == "TAKE":
+        st.success(f"**Your bot would TAKE:** {top['direction']} {friendly(top['pattern'])} — entry "
+                   f"{top['entry']:,.2f}, stop {top['stop']:,.2f}, target {top['target']:,.2f}, "
+                   f"R {top['r']:.2f}×, confidence {top['confidence']}/5.")
+    else:
+        st.warning(f"**Your bot would SKIP today:** its top pick is {top['direction']} "
+                   f"{friendly(top['pattern'])}, but {top['reason']}.")
+
 ruleset = st.segmented_control(
     "Rule set", ["Original", "Version 3"], default="Original", key="ruleset",
     help="Original = your bot's rules exactly as coded. Version 3 = the same patterns, but only when they "
@@ -194,9 +216,14 @@ m1, m2, m3 = st.columns(3)
 if o["status"] == "unknown":
     m1.metric("Bullish", "–", help=tip)
     m2.metric("Bearish", "–", help=tip)
-    m3.metric("Unknown", "100%", help=tip)
-    st.info("**Unknown: no pattern is confirmed today.** None of our 10 rules is confirmed on the latest bar, "
-            "so there is no historical evidence to go on. The table below shows exactly what was checked.")
+    m3.metric(f"Unknown ({ruleset})", "100%", help=tip)
+    extra = ""
+    if ruleset == "Version 3" and len(today_all):
+        extra = (" The Original rules do confirm "
+                 + ", ".join(friendly(p) for p in dict.fromkeys(today_all["pattern"]))
+                 + " today: switch the rule set to Original to see its history.")
+    st.info(f"**Unknown under the {ruleset} rules: no pattern is confirmed today.** There is no historical "
+            "evidence to go on." + extra + " The table below shows exactly what was checked.")
 else:
     m1.metric("Bullish", share(o["bullish"]), help=tip)
     m2.metric("Bearish", share(o["bearish"]), help=tip)
@@ -299,6 +326,17 @@ for pattern in firing:
     st.markdown(f"### {RULE_NAME[rule_key]}: {friendly(pattern)} ({arrow})")
     st.caption(RULE_DESC[rule_key])
     st.caption("Supporting signs today: " + today[today["pattern"] == pattern]["factors"].iloc[0])
+    pl = plan_by_pattern.get(pattern)
+    if pl:
+        st.markdown("**Trade plan (from your bot's code)**")
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Entry", f"{pl['entry']:,.2f}")
+        c2.metric("Stop", f"{pl['stop']:,.2f}")
+        c3.metric("Target", f"{pl['target']:,.2f}")
+        c4.metric("Reward:risk", f"{pl['r']:.2f}×", help=f"Your bot required at least {MIN_R}×.")
+        c5.metric("Confidence", f"{pl['confidence']}/5", help="Number of distinct factors, capped at 5.")
+        msg = f"**{pl['decision']}**: {pl['reason']}" + (" · bot's top pick" if pl["top_pick"] else "")
+        (st.success if pl["decision"] == "TAKE" else st.warning if pl["decision"] == "SKIP" else st.info)(msg)
 
     n_past = len(past)
     if n_past < SMALL_SAMPLE:
