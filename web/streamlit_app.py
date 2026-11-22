@@ -483,10 +483,19 @@ def trend_word(bars: pd.DataFrame) -> str:
     return doc_rules.TREND_TEXT[doc_rules.trend_series(rules._add_indicators(bars)).iloc[-1]] if len(bars) else "sideways"
 
 
+# ── Which pattern: when several show up, everything below follows the one picked ──
+pattern = None
+if len(firing) > 1:
+    with st.container(key="pick"):
+        pattern = st.segmented_control(f"{len(firing)} patterns showed up · pick one", firing, default=firing[0],
+                                       format_func=pattern_name, **keep(f"pattern_{tf_key}", firing[0])) or firing[0]
+elif firing:
+    pattern = firing[0]
+
 # ── Hero: one sentence + donut ──────────────────────────────────────────────
 horizon = st.session_state.get(f"horizon_{tf_key}") or main_h
 horizon = horizon if horizon in HORIZONS else main_h
-o = outlook(hist, last_date, horizon, sfx)
+o = outlook(hist[hist["pattern"] == pattern] if pattern else hist, last_date, horizon, sfx)
 n = o["sample"]
 trend = str(context["trend"])
 arrow = ('<span style="color:var(--down)">▼</span>' if "DOWN" in trend else
@@ -537,10 +546,10 @@ with st.container(key="hero"):
 # ── Three cards ─────────────────────────────────────────────────────────────
 st.write("")
 k1, k2, k3 = st.columns(3)
-r_first = today[today["pattern"] == firing[0]].iloc[0] if firing else None
+r_first = today[today["pattern"] == pattern].iloc[0] if firing else None
 if firing:
-    p0 = firing[0]
-    more = f" +{len(firing) - 1} more" if len(firing) > 1 else ""
+    p0 = pattern
+    more = f" · 1 of {len(firing)} today" if len(firing) > 1 else ""
     if yearly:
         detail = POINTS.get(dir_of[p0], "Just a fact about the year")
     else:
@@ -556,13 +565,13 @@ else:
                 '</div>', unsafe_allow_html=True)
 
 if tf_key == "daily" and plans:
-    top = plans[0]
+    top = plan_by_pattern.get(pattern, plans[0])
     cls, lab = ("take", "✓ Would act") if top["decision"] == "TAKE" else ("pass", "✕ Would pass")
     short = (f"Gain is {top['r']:.2f}× the risk; rules need {MIN_R}×" if "reward:risk" in top["reason"]
              else f"{top['confidence']} signs line up" if top["decision"] == "TAKE"
              else f"Needs {MIN_CONFIDENCE}+ signs" if top["confidence"] < MIN_CONFIDENCE else "No sensible exit prices")
     k2.markdown(f'<div class="card"><div class="lab">Would the rules act? '
-                f'{tip("We test the strongest daily pattern against one fixed set of trading rules. " + esc(plain_reason(top, currency)) + " This shows how those rules behave; it is not a recommendation.")}</div>'
+                f'{tip("We test this daily pattern against one fixed set of trading rules. " + esc(plain_reason(top, currency)) + " This shows how those rules behave; it is not a recommendation.")}</div>'
                 f'<span class="pillv {cls}">{lab}</span><div class="small">{esc(short)}</div></div>',
                 unsafe_allow_html=True)
 elif firing and not yearly:
@@ -609,15 +618,9 @@ else:
                 unsafe_allow_html=True)
 
 # ── Detail for one pattern: trade example + chart ───────────────────────────
-pattern, n_past = None, 0
+n_past = 0
 if firing:
     st.write("")
-    if len(firing) > 1:
-        with st.container(key="pick"):
-            pattern = st.segmented_control("Pattern", firing, default=firing[0], format_func=pattern_name,
-                                           **keep(f"pattern_{tf_key}", firing[0])) or firing[0]
-    else:
-        pattern = firing[0]
     occ_all = hist[hist["pattern"] == pattern].sort_values("date")
     direction = occ_all["direction"].iloc[0]
     rule_key = occ_all["rule"].iloc[0]
