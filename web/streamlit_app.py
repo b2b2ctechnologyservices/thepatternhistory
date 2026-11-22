@@ -15,15 +15,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root: rules.py, pattern_history/
 
+# Streamlit Cloud pulls new code into the running process without restarting it, so
+# modules imported by an older version stay cached and new names fail to import.
+# Drop our own modules on each run so the current files are always used.
+for _mod in [m for m in sys.modules if m == "rules" or m == "pattern_history" or m.startswith("pattern_history.")]:
+    del sys.modules[_mod]
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from pattern_history.catalog import RULE_DESC, RULE_NAME, RULES
+import rules
+from pattern_history import doc_rules
+from pattern_history.catalog import RULE_DESC, RULE_NAME, RULES, YEARLY_CHECKS, YEARLY_DESC, YEARLY_NAME
 from pattern_history.data import MARKETS, DataError, ProviderBusy, load_daily, resolve
 from pattern_history.factors import is_independent, label as factor_label, split as split_factors
 from pattern_history.plan import MIN_CONFIDENCE, MIN_R, todays_plans
-from pattern_history.history import HORIZONS, directional, outlook, replay, rule_stats
+from pattern_history.history import directional, outlook, rule_stats
+from pattern_history.multi import DAILY_YEARS, scan_all
+from pattern_history.timeframes import TIMEFRAMES
 
 SMALL_SAMPLE = 10
 DISCLAIMER = (
@@ -31,9 +41,25 @@ DISCLAIMER = (
     "sell any security. Hypothetical trades show how a fixed set of rules would behave; nobody is told to "
     "place them. Past patterns do not guarantee future results."
 )
-HZ = {1: "1 day", 5: "1 week", 20: "1 month", 60: "3 months"}
-HZ_LONG = {1: "the next trading day", 5: "1 week (5 trading days)", 20: "1 month (20 trading days)",
-           60: "3 months (60 trading days)"}
+# Look-ahead labels per timeframe (keyed by the forward-return suffix: d/w/m/y).
+HZS = {
+    "d": {1: "1 day", 5: "1 week", 20: "1 month", 60: "3 months"},
+    "w": {1: "1 week", 4: "1 month", 13: "3 months", 26: "6 months"},
+    "m": {1: "1 month", 3: "3 months", 6: "6 months", 12: "1 year"},
+    "y": {1: "1 year"},
+}
+HZS_LONG = {
+    "d": {1: "the next trading day", 5: "1 week (5 trading days)", 20: "1 month (20 trading days)",
+          60: "3 months (60 trading days)"},
+    "w": {1: "the next week", 4: "1 month (4 weeks)", 13: "3 months (13 weeks)", 26: "6 months (26 weeks)"},
+    "m": {1: "the next month", 3: "3 months", 6: "6 months", 12: "1 year (12 months)"},
+    "y": {1: "the next calendar year"},
+}
+DEFAULT_H = {"d": 20, "w": 4, "m": 3, "y": 1}
+# How each timeframe's latest bar is described ("on ... chart <WHEN>").
+WHEN = {"daily": "today", "weekly": "in the latest finished week", "monthly": "in the latest finished month",
+        "yearly": "this year so far"}
+BIGGER = {"daily": "weekly", "weekly": "monthly"}
 TREND_TEXT = {
     "UP": "the price has mostly been rising over recent weeks",
     "STRONG_UP": "the price has been rising over recent weeks, and the rise is speeding up",
@@ -66,9 +92,9 @@ def _b64(name: str) -> str:
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=200)
-def get_history(ticker: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    prices = load_daily(ticker, years=25)
-    return prices, replay(prices)
+def get_history(ticker: str) -> dict:
+    """Every timeframe for a ticker: {"daily": TimeframeResult, "weekly": ..., "monthly": ..., "yearly": ...}."""
+    return scan_all(load_daily(ticker, years=0))
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=200)
@@ -90,7 +116,9 @@ def share(x: float) -> str:
 
 
 def friendly(pattern: str) -> str:
-    return pattern.replace("_", " ").title().replace("Ma", "MA")
+    import re
+
+    return re.sub(r"\bMa(\d*)\b", r"MA\1", pattern.replace("_", " ").title())
 
 
 def esc(s) -> str:
@@ -98,6 +126,8 @@ def esc(s) -> str:
 
 
 def points(direction: str) -> str:
+    if direction == "NONE":
+        return "is a simple fact about the year, not a pattern that points up or down"
     return "points up (it suggests the price may rise)" if direction == "LONG" \
         else "points down (it suggests the price may fall)"
 
@@ -153,20 +183,24 @@ def confidence_html(pattern: str, factors, confidence: int) -> str:
     )
 
 
-def method_text(ticker: str, horizon: int, o: dict) -> str:
+def method_text(ticker: str, horizon: int, o: dict, tf) -> str:
+    unit = tf.unit
+    span = f"~{DAILY_YEARS} years" if tf.key == "daily" else "the full price history"
     if o["status"] == "unknown":
-        return (f"None of our 10 patterns showed up on {ticker}'s latest daily price bar, so there is nothing "
-                "to look up in history.")
+        return (f"None of our {tf.label.lower()} patterns showed up on {ticker}'s latest {tf.label.lower()} price "
+                "bar, so there is nothing to look up in history.")
     return (
-        f"Step 1: today these pattern(s) showed up on {ticker}: {', '.join(friendly(p) for p in o['patterns'])}. "
-        f"Step 2: we went back through ~25 years of {ticker}'s daily prices and found every past trading day "
-        f"when the same pattern showed up, using only the prices known up to that day "
-        f"({o['sample']} days; a day where two of them showed up counts once). "
-        f"Step 3: for each of those days we compared the closing price with the close {HZ_LONG[horizon]} later. "
-        "'Went up' = share of days where the price was higher; 'Went down' = share where it was lower. "
-        "Today isn't counted because we don't know its outcome yet. Past patterns do not guarantee future results."
+        f"Step 1: {WHEN[tf.key]} these pattern(s) showed up on {ticker}: "
+        f"{', '.join(friendly(p) for p in o['patterns'])}. "
+        f"Step 2: we went back through {span} of {ticker}'s {tf.label.lower()} prices and found every past "
+        f"{unit} when the same pattern showed up, using only the prices known up to then "
+        f"({o['sample']} {unit}s; a {unit} where two of them showed up counts once). "
+        f"Step 3: for each of those {unit}s we compared the closing price with the close "
+        f"{HZS_LONG[tf.suffix][horizon]} later. "
+        f"'Went up' = share of {unit}s where the price was higher; 'Went down' = share where it was lower. "
+        f"The latest {unit} isn't counted because we don't know its outcome yet. "
+        "Past patterns do not guarantee future results."
     )
-
 
 
 # ── Look and feel: Indigo ────────────────────────────────────────────────────
@@ -334,12 +368,13 @@ if submitted and query.strip():
 q, q_market = st.session_state.get("query", ("", market))
 if not market or not q or q_market != market:
     st.markdown(
-        '<div class="eyebrow">25 years of prices · 10 chart patterns · US &amp; India</div>'
+        '<div class="eyebrow">Up to 25+ years of prices · 13 patterns · daily, weekly, monthly &amp; yearly · US &amp; India</div>'
         '<div class="headline">What happened every time<br>this pattern showed up before?</div>'
         '<div class="sub">Pick a market, type a stock, see the history. '
-        + tip("We check a stock for 10 well-known chart patterns on the latest day, then look up every past day the "
-              "same pattern showed up in ~25 years of that stock's prices, and show what the price did next. US tickers "
-              "work as-is (AAPL, BRK-B). For India type the NSE symbol (SBIN) or the company name.")
+        + tip("We check a stock's latest daily, weekly, monthly and yearly price bars for well-known chart patterns, "
+              "then look up every past time the same pattern showed up in that stock's own history, and show what the "
+              "price did next. US tickers work as-is (AAPL, BRK-B). For India type the NSE symbol (SBIN) or the "
+              "company name.")
         + '</div>', unsafe_allow_html=True)
     footer()
     st.stop()
@@ -367,7 +402,7 @@ ticker, company = candidates[choice]["symbol"], candidates[choice]["name"]
 
 busy(f"Scanning {company} ({ticker})…")
 try:
-    prices, hist = get_history(ticker)
+    results = get_history(ticker)
 except ProviderBusy as e:
     strip.error(str(e)); footer(); st.stop()
 except DataError as e:
@@ -377,70 +412,117 @@ except Exception as e:
     strip.error(f"Couldn't load data right now. Please try again in a minute. ({e})")
     footer(); st.stop()
 
-last_date = prices.index[-1]
-last_close = float(prices["close"].iloc[-1])
+daily_prices = results["daily"].bars
 currency = "₹" if market == "India" else "$"
-context, plans = get_plans(ticker, prices, last_date)
+context, plans = get_plans(ticker, daily_prices, daily_prices.index[-1])
 plan_by_pattern = {p["pattern"]: p for p in plans}
-today = hist[hist["date"] == last_date]
-firing = list(dict.fromkeys(today["pattern"]))
-rule_of = dict(zip(today["pattern"], today["rule"]))
-dir_of = dict(zip(today["pattern"], today["direction"]))
-
-
-def pattern_name(pattern: str) -> str:
-    rule = rule_of.get(pattern)
-    return RULE_NAME[rule] if rule else friendly(pattern)
-
+day_close = float(daily_prices["close"].iloc[-1])
 
 with strip.container():
     a, b = st.columns([4, 1.2], vertical_alignment="center") if len(candidates) > 1 else (st.container(), None)
-    a.markdown(f'<span class="chipok">✓ Scanned {esc(ticker)} · {len(prices):,} days</span>', unsafe_allow_html=True)
+    a.markdown(f'<span class="chipok">✓ Scanned {esc(ticker)} · {len(daily_prices):,} days of prices, '
+               'checked on 4 timeframes</span>', unsafe_allow_html=True)
     if b is not None:
         with b.popover("Not this company?", width="stretch"):
             st.radio("Other matches", range(len(candidates)), index=choice, key=pick_key,
                      format_func=lambda i: f"{candidates[i]['symbol']} — {candidates[i]['name']}")
 
+def keep(key: str, fallback) -> dict:
+    """Clicking the already-picked button would clear a segmented control; put the last choice back instead."""
+    def _cb():
+        if st.session_state.get(key) is None:
+            st.session_state[key] = st.session_state.get(f"_last_{key}", fallback)
+        st.session_state[f"_last_{key}"] = st.session_state[key]
+    return {"key": key, "on_change": _cb}
+
+
+# ── Timeframe ───────────────────────────────────────────────────────────────
+with st.container(key="tfbar"):
+    t1, t2 = st.columns([3, 1], vertical_alignment="center")
+    tf_key = t1.segmented_control(
+        "Timeframe", list(TIMEFRAMES), default="daily", **keep("timeframe", "daily"), label_visibility="collapsed",
+        format_func=lambda k: TIMEFRAMES[k].label) or "daily"
+    t2.markdown('<div class="small" style="text-align:right">What is this? ' + tip(
+        "Each bar on a price chart can be one day, one week (Mon–Fri), one month or one calendar year. Bigger bars "
+        "show the bigger picture, but there are fewer of them in history, so fewer past cases.") + '</div>',
+        unsafe_allow_html=True)
+
+res = results[tf_key]
+tf, prices, hist = res.tf, res.bars, res.hist
+sfx = tf.suffix
+HZ, HORIZONS, main_h = HZS[sfx], tf.horizons, DEFAULT_H[sfx]
+if prices.empty:
+    st.info(f"There isn't enough price history for {ticker} to build {tf.label.lower()} bars yet.")
+    footer()
+    st.stop()
+last_date = prices.index[-1]
+today = hist[hist["date"] == last_date]
+firing = list(dict.fromkeys(today["pattern"]))
+rule_of = dict(zip(today["pattern"], today["rule"]))
+dir_of = dict(zip(today["pattern"], today["direction"]))
+yearly = tf_key == "yearly"
+n_checks = len(YEARLY_CHECKS) if yearly else len(RULES)
+what = "yearly checks" if yearly else f"{n_checks} patterns"
+SHORT_HZ = {"1 day": "1D", "1 week": "1W", "1 month": "1M", "3 months": "3M", "6 months": "6M", "1 year": "1Y"}
+ARROW = {"LONG": '<span style="color:var(--up)">↑</span>', "SHORT": '<span style="color:var(--down)">↓</span>'}
+POINTS = {"LONG": "Points up", "SHORT": "Points down"}
+
+
+def pattern_name(pattern: str) -> str:
+    if pattern in YEARLY_NAME:
+        return YEARLY_NAME[pattern]
+    rule = rule_of.get(pattern)
+    return RULE_NAME[rule] if rule in RULE_NAME else friendly(pattern)
+
+
+def pattern_desc(rule: str, pattern: str) -> str:
+    return YEARLY_DESC.get(pattern) or RULE_DESC.get(rule, "")
+
+
+def trend_word(bars: pd.DataFrame) -> str:
+    return doc_rules.TREND_TEXT[doc_rules.trend_series(rules._add_indicators(bars)).iloc[-1]] if len(bars) else "sideways"
+
+
 # ── Hero: one sentence + donut ──────────────────────────────────────────────
-horizon = st.session_state.get("horizon") or 20
-o = outlook(hist, last_date, horizon)
+horizon = st.session_state.get(f"horizon_{tf_key}") or main_h
+horizon = horizon if horizon in HORIZONS else main_h
+o = outlook(hist, last_date, horizon, sfx)
 n = o["sample"]
 trend = str(context["trend"])
-arrow = '<span style="color:var(--down)">▼</span>' if "DOWN" in trend else (
-    '<span style="color:var(--up)">▲</span>' if "UP" in trend else "")
+arrow = ('<span style="color:var(--down)">▼</span>' if "DOWN" in trend else
+         '<span style="color:var(--up)">▲</span>' if "UP" in trend else "")
+dirs = {dir_of[p] for p in o["patterns"] if p in dir_of} if o["status"] != "unknown" else set()
 with st.container(key="hero"):
     h_left, h_right = st.columns([1.55, 1], gap="large", vertical_alignment="center")
     with h_left:
         if o["status"] == "unknown":
-            line = f"No pattern on {esc(ticker)} today."
-            sub = "Most days have none. History appears when a pattern does."
+            line = (f"No yearly check hit on {esc(ticker)} this year so far." if yearly
+                    else f"No {tf.label.lower()} pattern on {esc(ticker)} {WHEN[tf_key]}.")
+            sub = f"Most {tf.unit}s have none. Try another timeframe, or come back later."
         elif not n:
-            line = f"This pattern is new for {esc(ticker)}."
-            sub = "It has never shown up before with a known outcome, so there's no history yet."
+            line = f"This is new for {esc(ticker)}."
+            sub = f"It has never shown up before on the {tf.label.lower()} chart with a known outcome."
         else:
             upish = o["bullish"] >= o["bearish"]
             word, val, col = ("rose", o["bullish"], "var(--up)") if upish else ("fell", o["bearish"], "var(--down)")
-            line = (f'After this pattern, {esc(ticker)} {word} <em style="color:{col}">{val:.0%}</em> of the time.')
-            dirs = {dir_of[p] for p in o["patterns"] if p in dir_of}
-            way = ("points up" if dirs == {"LONG"} else "points down" if dirs == {"SHORT"} else "is mixed")
-            sub = f"{n} past cases · checked {HZ[horizon]} later · today's pattern {way}"
-        st.markdown(f'<div class="eyebrow"><b>{esc(ticker)}</b>{esc(company)} · {currency}{last_close:,.2f} {arrow}</div>'
+            line = f'After this pattern, {esc(ticker)} {word} <em style="color:{col}">{val:.0%}</em> of the time.'
+            way = ("points up" if dirs == {"LONG"} else "points down" if dirs == {"SHORT"}
+                   else "is just a fact, not a direction" if dirs == {"NONE"} else "is mixed")
+            sub = f"{n} past {tf.unit}s · checked {HZ[horizon]} later · the {tf.label.lower()} pattern {way}"
+        st.markdown(f'<div class="eyebrow"><b>{esc(ticker)}</b>{esc(company)} · {currency}{day_close:,.2f} {arrow}</div>'
                     f'<div class="headline">{line}</div><div class="sub">{sub}</div>', unsafe_allow_html=True)
         r1, r2 = st.columns([1, 1.3], vertical_alignment="center")
-        r1.segmented_control("Look ahead", HORIZONS, default=20, format_func=lambda h: HZ[h].replace(" ", "")
-                             .replace("1day", "1D").replace("1week", "1W").replace("1month", "1M").replace("3months", "3M"),
-                             key="horizon", label_visibility="collapsed")
-        if n and o["status"] != "unknown":
-            dirs = {dir_of[p] for p in o["patterns"] if p in dir_of}
-            if len(dirs) == 1:
-                agree = o["bullish"] if dirs == {"LONG"} else o["bearish"]
-                verdict = ("History mostly agreed with it" if agree >= 0.55 else
-                           "History mostly went against it" if agree <= 0.45 else "History is a coin flip here")
-                k_up, k_dn = round(o["bullish"] * n), round(o["bearish"] * n)
-                r2.markdown(f'<div class="pillv hist">{verdict} ' + tip(
-                    f"In {k_up} of {n} past cases {esc(ticker)}'s price was higher {HZ[horizon]} later, and in {k_dn} it "
-                    f"was lower. Today's pattern {('points up' if dirs == {'LONG'} else 'points down')}, so that is how "
-                    "often history agreed with it.") + "</div>", unsafe_allow_html=True)
+        r1.segmented_control("Look ahead", HORIZONS, default=main_h, format_func=lambda h: SHORT_HZ.get(HZ[h], HZ[h]),
+                             **keep(f"horizon_{tf_key}", main_h), label_visibility="collapsed")
+        if n and len(dirs) == 1 and dirs <= {"LONG", "SHORT"}:
+            agree = o["bullish"] if dirs == {"LONG"} else o["bearish"]
+            verdict = ("History mostly agreed with it" if agree >= 0.55 else
+                       "History mostly went against it" if agree <= 0.45 else "History is a coin flip here")
+            k_up, k_dn = round(o["bullish"] * n), round(o["bearish"] * n)
+            r2.markdown(f'<div class="pillv hist">{verdict} ' + tip(
+                f"In {k_up} of {n} past cases {esc(ticker)}'s price was higher {HZ[horizon]} later, and in {k_dn} it "
+                f"was lower. The pattern {('points up' if dirs == {'LONG'} else 'points down')}, so that is how "
+                "often history agreed with it.") + "</div>", unsafe_allow_html=True)
         if n and n < SMALL_SAMPLE:
             st.caption(f"Only {n} past cases: too few to read much into.")
     with h_right:
@@ -449,68 +531,100 @@ with st.container(key="hero"):
                         f'<div class="legend" style="justify-content:center;margin-top:10px">'
                         f'<span><i style="background:var(--up)"></i>up {o["bullish"]:.0%}</span>'
                         f'<span><i style="background:var(--down)"></i>down {o["bearish"]:.0%}</span>'
-                        f'<span>{tip(esc(method_text(ticker, horizon, o)))}</span></div></div>',
+                        f'<span>{tip(esc(method_text(ticker, horizon, o, tf)))}</span></div></div>',
                         unsafe_allow_html=True)
 
 # ── Three cards ─────────────────────────────────────────────────────────────
 st.write("")
 k1, k2, k3 = st.columns(3)
+r_first = today[today["pattern"] == firing[0]].iloc[0] if firing else None
 if firing:
     p0 = firing[0]
     more = f" +{len(firing) - 1} more" if len(firing) > 1 else ""
-    sign_n = len(split_factors(p0, today[today["pattern"] == p0]["factors"].iloc[0])[1])
-    arrow0 = '<span style="color:var(--up)">↑</span>' if dir_of[p0] == "LONG" else '<span style="color:var(--down)">↓</span>'
-    k1.markdown(f'<div class="card"><div class="lab">Today\'s pattern {tip(esc(RULE_DESC[rule_of[p0]]))}</div>'
-                f'<div class="big">{arrow0} {esc(pattern_name(p0))}</div>'
-                f'<div class="small">{"Points up" if dir_of[p0] == "LONG" else "Points down"} · {sign_n} supporting '
-                f'sign{"s" if sign_n != 1 else ""}{esc(more)}</div></div>', unsafe_allow_html=True)
+    if yearly:
+        detail = POINTS.get(dir_of[p0], "Just a fact about the year")
+    else:
+        sign_n = len([x for x in str(r_first["signs"]).split(", ") if x])
+        detail = f"{POINTS.get(dir_of[p0], 'Just a fact')} · {sign_n} supporting sign{'s' if sign_n != 1 else ''}"
+    k1.markdown(f'<div class="card"><div class="lab">{esc(tf.label)} pattern '
+                f'{tip(esc(pattern_desc(rule_of[p0], p0)))}</div>'
+                f'<div class="big">{ARROW.get(dir_of[p0], "•")} {esc(pattern_name(p0))}</div>'
+                f'<div class="small">{esc(detail)}{esc(more)}</div></div>', unsafe_allow_html=True)
 else:
-    k1.markdown('<div class="card"><div class="lab">Today\'s pattern</div><div class="big">None today</div>'
-                '<div class="small">None of the 10 patterns showed up on the latest day.</div></div>',
-                unsafe_allow_html=True)
-if plans:
+    k1.markdown(f'<div class="card"><div class="lab">{esc(tf.label)} pattern</div><div class="big">None {WHEN[tf_key]}'
+                f'</div><div class="small">None of our {what} showed up on the latest {tf.unit}. That\'s normal.</div>'
+                '</div>', unsafe_allow_html=True)
+
+if tf_key == "daily" and plans:
     top = plans[0]
     cls, lab = ("take", "✓ Would act") if top["decision"] == "TAKE" else ("pass", "✕ Would pass")
     short = (f"Gain is {top['r']:.2f}× the risk; rules need {MIN_R}×" if "reward:risk" in top["reason"]
              else f"{top['confidence']} signs line up" if top["decision"] == "TAKE"
              else f"Needs {MIN_CONFIDENCE}+ signs" if top["confidence"] < MIN_CONFIDENCE else "No sensible exit prices")
     k2.markdown(f'<div class="card"><div class="lab">Would the rules act? '
-                f'{tip("We test every pattern against one fixed set of trading rules. " + esc(plain_reason(top, currency)) + " This shows how those rules behave; it is not a recommendation.")}</div>'
+                f'{tip("We test the strongest daily pattern against one fixed set of trading rules. " + esc(plain_reason(top, currency)) + " This shows how those rules behave; it is not a recommendation.")}</div>'
                 f'<span class="pillv {cls}">{lab}</span><div class="small">{esc(short)}</div></div>',
                 unsafe_allow_html=True)
+elif firing and not yearly:
+    ok = bool(r_first["meets_rules"])
+    why = ("It is at a meaningful price level, has at least 2 supporting factors, and the bigger-picture trend "
+           "isn't strongly against it." if ok else "It misses because: " + doc_rules.why_not(r_first) + ".")
+    k2.markdown(f'<div class="card"><div class="lab">Rule checklist '
+                f'{tip("A quality check from the trend-and-level method: is the pattern at a meaningful price level, with at least 2 supporting factors, and not fighting the bigger trend? " + esc(why))}</div>'
+                f'<span class="pillv {"take" if ok else "pass"}">{"✓ Meets it" if ok else "✕ Misses it"}</span>'
+                f'<div class="small">{"Location, factors and trend line up" if ok else esc(doc_rules.why_not(r_first)).capitalize()}'
+                '</div></div>', unsafe_allow_html=True)
 else:
-    k2.markdown('<div class="card"><div class="lab">Would the rules act?</div><span class="pillv none">— No setup</span>'
-                '<div class="small">No pattern, so nothing to act on.</div></div>', unsafe_allow_html=True)
-tech, bow = str(context["technical"]), str(context["bow_tie"])
-mood = []
-if trend in TREND_TEXT:
-    mood.append(f"<b>Trend {esc(trend.replace('_', ' ').lower())}:</b> {esc(TREND_TEXT[trend])}.")
-if tech in POSITION_TEXT:
-    mood.append(f"<b>{esc(tech.title())}:</b> {esc(POSITION_TEXT[tech])}.")
-if bow in BOWTIE_TEXT:
-    mood.append(f"<b>Bow tie:</b> {esc(BOWTIE_TEXT[bow])}.")
-t_arrow = "↑" if "UP" in trend else "↓" if "DOWN" in trend else "→"
-k3.markdown(f'<div class="card"><div class="lab">Market mood {tip("<br><br>".join(mood))}</div><div class="chips">'
-            f'<span class="chip">Trend {t_arrow}</span><span class="chip">{esc(tech.title())} vs averages</span>'
-            f'<span class="chip">{"No bow tie" if bow == "none" else "Bow tie " + esc(bow.lower())}</span></div></div>',
-            unsafe_allow_html=True)
+    k2.markdown('<div class="card"><div class="lab">Would the rules act?</div><span class="pillv none">— Nothing to check</span>'
+                f'<div class="small">{"Yearly checks are simple facts, so there is no setup to judge." if yearly and firing else "No pattern, so nothing to act on."}'
+                '</div></div>', unsafe_allow_html=True)
+
+mood, chips = [], []
+if tf_key == "daily":
+    tech, bow = str(context["technical"]), str(context["bow_tie"])
+    if trend in TREND_TEXT:
+        mood.append(f"<b>Trend {esc(trend.replace('_', ' ').lower())}:</b> {esc(TREND_TEXT[trend])}.")
+    if tech in POSITION_TEXT:
+        mood.append(f"<b>{esc(tech.title())}:</b> {esc(POSITION_TEXT[tech])}.")
+    if bow in BOWTIE_TEXT:
+        mood.append(f"<b>Bow tie:</b> {esc(BOWTIE_TEXT[bow])}.")
+    t_arrow = "↑" if "UP" in trend else "↓" if "DOWN" in trend else "→"
+    chips += [f"Trend {t_arrow}", f"{tech.title()} vs averages", "No bow tie" if bow == "none" else f"Bow tie {bow.lower()}"]
+elif not yearly:
+    t = trend_word(prices)
+    chips.append(f"{tf.label} trend: {t}")
+    mood.append(f"<b>{esc(tf.label)} trend {esc(t)}:</b> based on the 20, 50 and 200-{esc(tf.unit)} average prices "
+                "and how far apart they are.")
+if tf_key in BIGGER:
+    bt = trend_word(results[BIGGER[tf_key]].bars)
+    chips.append(f"{BIGGER[tf_key].capitalize()}: {bt}")
+    mood.append(f"<b>Bigger picture ({BIGGER[tf_key]}) {esc(bt)}:</b> the trend on the {BIGGER[tf_key]} chart, "
+                "which usually matters more than the smaller one.")
+if chips:
+    k3.markdown(f'<div class="card"><div class="lab">Market mood {tip("<br><br>".join(mood))}</div><div class="chips">'
+                + "".join(f'<span class="chip">{esc(c)}</span>' for c in chips) + '</div></div>', unsafe_allow_html=True)
+else:
+    k3.markdown(f'<div class="card"><div class="lab">This year so far</div><div class="big">{currency}{day_close:,.2f}</div>'
+                f'<div class="small">Yearly bars are compared with last year\'s high, low and close.</div></div>',
+                unsafe_allow_html=True)
 
 # ── Detail for one pattern: trade example + chart ───────────────────────────
-pattern = None
+pattern, n_past = None, 0
 if firing:
     st.write("")
     if len(firing) > 1:
         with st.container(key="pick"):
             pattern = st.segmented_control("Pattern", firing, default=firing[0], format_func=pattern_name,
-                                           key="pattern") or firing[0]
+                                           **keep(f"pattern_{tf_key}", firing[0])) or firing[0]
     else:
         pattern = firing[0]
     occ_all = hist[hist["pattern"] == pattern].sort_values("date")
     direction = occ_all["direction"].iloc[0]
+    rule_key = occ_all["rule"].iloc[0]
     past = occ_all[occ_all["date"] < last_date]
     n_past = len(past)
     d1, d2 = st.columns([1, 1.6])
-    pl = plan_by_pattern.get(pattern)
+    pl = plan_by_pattern.get(pattern) if tf_key == "daily" else None
     with d1:
         if pl:
             ind_n = len(split_factors(pattern, pl["factors"])[1])
@@ -533,98 +647,129 @@ if firing:
                 + f'</div><div style="margin-top:6px">{conf_dots(min(ind_n, pl["confidence"]), pl["confidence"])}</div>'
                 f'<div class="small" style="margin-top:2px;font-size:.75rem">{pl["confidence"]}/5 · {ind_n} independent</div>'
                 '</div></div></div>', unsafe_allow_html=True)
+        elif yearly:
+            st.markdown(f'<div class="card"><div class="lab">About this check</div><div class="big">'
+                        f'{esc(pattern_name(pattern))}</div><div class="small">{esc(pattern_desc(rule_key, pattern))} '
+                        'Yearly bars are too few for chart patterns, so we use simple checks against last year.'
+                        '</div></div>', unsafe_allow_html=True)
         else:
-            st.markdown('<div class="card"><div class="lab">Trade example</div><div class="small">No trade levels for '
-                        'this pattern today.</div></div>', unsafe_allow_html=True)
+            r0 = today[today["pattern"] == pattern].iloc[0]
+            signs = [x for x in str(r0["signs"]).split(", ") if x]
+            why = ("Trade examples are only worked out for daily patterns." if tf_key != "daily" else
+                   "Trade examples are only worked out for the 10 classic patterns." if rule_key.startswith("doc_")
+                   else "These rules didn't work out trade levels for this pattern today.")
+            st.markdown(
+                f'<div class="card"><div class="lab">What backs it up {tip(esc(why) + " Here we show the supporting signs and the history instead.")}</div>'
+                f'<div class="chips">' + ("".join(f'<span class="chip">{esc(s)}</span>' for s in signs)
+                                          or '<span class="chip">No extra signs</span>') + '</div>'
+                f'<div class="small" style="margin-top:12px"><b>Meaningful level:</b> {esc(str(r0["location"] or "") or "none nearby")}'
+                f' · <b>Factors:</b> {int(r0["factor_count"])}</div>'
+                f'<div class="small">{"✓ Meets the rule checklist" if r0["meets_rules"] else "✕ Misses the checklist: " + esc(doc_rules.why_not(r0))}</div>'
+                '</div>', unsafe_allow_html=True)
     with d2:
         with st.container(key="chartcard", border=False):
-            st.markdown(f'<div class="lab" style="margin:0 0 4px">25 years of {esc(ticker)} · every time this pattern '
-                        'showed up ' + tip("Grey line: the price, adjusted for splits and dividends. Each dot is a past "
-                                           "day this pattern showed up. Green: over the next month the price moved the "
-                                           "way the pattern pointed. Red: it moved the other way. Tap a dot for details.")
-                        + '</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="lab" style="margin:0 0 4px">{esc(ticker)} since {prices.index[0]:%Y} · every '
+                        f'{esc(tf.unit)} this showed up ' + tip(
+                            f"Line: the {tf.label.lower()} closing price, adjusted for splits and dividends. Each dot is "
+                            f"a past {tf.unit} this showed up. Green: over the next {HZ[main_h]} the price "
+                            + ("went up" if direction == "NONE" else "moved the way the pattern pointed")
+                            + ". Red: it went the other way. Tap a dot for details.") + '</div>', unsafe_allow_html=True)
             chart_px = prices[["close"]].reset_index().rename(columns={"ts": "date"})
             accent = THEMES[market][0]
-            line = alt.Chart(chart_px).mark_area(
+            area = alt.Chart(chart_px).mark_area(
                 line={"color": "#8B86C9", "strokeWidth": 1.4}, color=alt.Gradient(
                     gradient="linear", stops=[alt.GradientStop(color="#ECEAFE", offset=0),
                                               alt.GradientStop(color="#FFFFFF", offset=1)], x1=1, x2=1, y1=1, y2=0)
             ).encode(x=alt.X("date:T", title=None), y=alt.Y("close:Q", title=None, scale=alt.Scale(zero=False)))
-            marks = occ_all[["date", "close", "ret_20d"]].copy()
-            marks["After 1 month"] = ["Not known yet" if pd.isna(x) else ("Went its way" if x > 0 else "Went against")
-                                      for x in directional(marks["ret_20d"], direction)]
-            marks["Move"] = [pct(x) for x in marks["ret_20d"]]
+            mcol, after = f"ret_{main_h}{sfx}", f"After {HZ[main_h]}"
+            good, bad = ("Went up", "Went down") if direction == "NONE" else ("Went its way", "Went against")
+            marks = occ_all[["date", "close", mcol]].copy()
+            marks[after] = ["Not known yet" if pd.isna(x) else (good if x > 0 else bad)
+                            for x in directional(marks[mcol], direction)]
+            marks["Move"] = [pct(x) for x in marks[mcol]]
             pts = alt.Chart(marks).mark_circle(size=55, stroke="white", strokeWidth=1.2, opacity=1).encode(
                 x="date:T", y="close:Q",
-                color=alt.Color("After 1 month:N", legend=None, scale=alt.Scale(
-                    domain=["Went its way", "Went against", "Not known yet"], range=["#12B886", "#FF6B6B", accent])),
+                color=alt.Color(f"{after}:N", legend=None, scale=alt.Scale(
+                    domain=[good, bad, "Not known yet"], range=["#12B886", "#FF6B6B", accent])),
                 tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("close:Q", format=",.2f", title="Price"),
-                         alt.Tooltip("Move", title="1-month move"), "After 1 month"])
-            st.altair_chart((line + pts).properties(height=230).configure_view(strokeWidth=0)
+                         alt.Tooltip("Move", title=f"{HZ[main_h]} move"), after])
+            st.altair_chart((area + pts).properties(height=230).configure_view(strokeWidth=0)
                             .configure_axis(grid=False, labelColor="#6B6A8A", domain=False, tickColor="#E4E1FB",
                                             labelFont="Inter"), width="stretch")
-            st.markdown('<div class="legend"><span><i style="background:var(--up)"></i>went its way</span>'
-                        '<span><i style="background:var(--down)"></i>went against</span>'
+            st.markdown(f'<div class="legend"><span><i style="background:var(--up)"></i>{good.lower()}</span>'
+                        f'<span><i style="background:var(--down)"></i>{bad.lower()}</span>'
                         f'<span><i style="background:{accent}"></i>not known yet</span></div>', unsafe_allow_html=True)
 
 # ── Fold-out details ────────────────────────────────────────────────────────
 st.write("")
 if pattern is not None and n_past:
+    right_col = "Price went up" if direction == "NONE" else "Pattern was right"
     with st.expander(f"Results by time ahead · {pattern_name(pattern)}"):
-        stats = rule_stats(past, direction)
+        stats = rule_stats(past, direction, HORIZONS, sfx)
         st.dataframe(pd.DataFrame({
             "Looking ahead": [HZ[s.horizon] for s in stats], "Cases": [s.sample for s in stats],
-            "Pattern was right": [share(s.win_rate) for s in stats], "Average": [pct(s.average) for s in stats],
+            right_col: [share(s.win_rate) for s in stats], "Average": [pct(s.average) for s in stats],
             "Typical": [pct(s.median) for s in stats], "Worst": [pct(s.worst) for s in stats],
             "Best": [pct(s.best) for s in stats]}), hide_index=True, width="stretch")
         st.caption("Measured in the pattern's direction: for a pattern that points down, a price drop shows as positive.")
     with st.expander(f"Every past case ({n_past})"):
         table = past.sort_values("date", ascending=False)
-        res = directional(table["ret_20d"], direction)
+        res_dir = directional(table[f"ret_{main_h}{sfx}"], direction)
+        ok_lab, no_lab = ("⬆ Up", "⬇ Down") if direction == "NONE" else ("✅ Its way", "❌ Against")
         st.dataframe(pd.DataFrame({
             "Date": table["date"].dt.strftime("%Y-%m-%d"), "Price": table["close"].map(lambda v: f"{v:,.2f}"),
-            **{f"After {HZ[h]}": table[f"ret_{h}d"].map(pct) for h in HORIZONS},
-            "After 1 month": ["Not known yet" if pd.isna(x) else ("✅ Its way" if x > 0 else "❌ Against") for x in res],
+            **{f"After {HZ[h]}": table[f"ret_{h}{sfx}"].map(pct) for h in HORIZONS},
+            f"After {HZ[main_h]} ": ["Not known yet" if pd.isna(x) else (ok_lab if x > 0 else no_lab) for x in res_dir],
         }), hide_index=True, width="stretch", height=min(38 + 35 * n_past, 380))
 
 rows = []
-for key, name, desc in RULES:
-    fired_today = today[today["rule"] == key]
-    past_n = int(((hist["rule"] == key) & (hist["date"] < last_date)).sum())
+col = "pattern" if yearly else "rule"
+catalog = YEARLY_CHECKS if yearly else RULES
+seen_col = f"Seen since {prices.index[0]:%Y}"
+for key, name, desc in catalog:
+    fired_today = today[today[col] == key]
+    past_n = int(((hist[col] == key) & (hist["date"] < last_date)).sum())
     status = "—" if fired_today.empty else " / ".join(
-        "✅ up" if d == "LONG" else "✅ down" for d in dict.fromkeys(fired_today["direction"]))
-    rows.append({"Pattern": name, "Today": status, "Seen in ~25 yrs": past_n, "What it looks for": desc})
+        {"LONG": "✅ up", "SHORT": "✅ down"}.get(d, "✅ yes") for d in dict.fromkeys(fired_today["direction"]))
+    rows.append({"Pattern": name, WHEN[tf_key].capitalize(): status, seen_col: past_n, "What it looks for": desc})
 checked = pd.DataFrame(rows)
-with st.expander(f"All 10 patterns checked · {today['rule'].nunique()} today"):
+with st.expander(f"All {what} checked · {today[col].nunique()} {WHEN[tf_key]}"):
     st.dataframe(checked, hide_index=True, width="stretch",
                  column_config={"What it looks for": st.column_config.TextColumn(width="large")})
+    if not yearly:
+        st.caption("A pattern only counts when at least 2 of its signs agree. The last 3 come from the trend-and-level "
+                   "method (trend and major levels first, then supporting signs).")
 
 evidence = (hist[hist["pattern"].isin(firing)] if firing else hist).copy()
 evidence.insert(0, "ticker", ticker)
-evidence["rule"] = evidence["rule"].map(RULE_NAME)
+evidence.insert(1, "timeframe", tf.label)
+evidence["rule"] = [pattern_name(p) for p in evidence["pattern"]]
 evidence["date"] = evidence["date"].dt.strftime("%Y-%m-%d")
 with st.expander("Download Excel / CSV"):
     summary_rows = []
     for h in HORIZONS:
-        oh = outlook(hist, last_date, h)
+        oh = outlook(hist, last_date, h, sfx)
         summary_rows.append({
-            "Looking ahead": HZ_LONG[h],
+            "Looking ahead": HZS_LONG[sfx][h],
+            "Outlook": "No pattern on the latest bar" if oh["status"] == "unknown" else "From past cases",
             "Went up %": None if pd.isna(oh["bullish"]) else round(oh["bullish"] * 100, 1),
             "Went down %": None if pd.isna(oh["bearish"]) else round(oh["bearish"] * 100, 1),
-            "Past cases": oh["sample"], "How it is calculated": method_text(ticker, h, oh)})
+            "Past cases": oh["sample"], "How it is calculated": method_text(ticker, h, oh, tf)})
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        pd.DataFrame({"Field": ["Company", "Ticker", "Market", "Latest day", "Patterns found today", "Disclaimer"],
-                      "Value": [company, ticker, MARKETS[market]["label"], f"{last_date:%Y-%m-%d}",
+        pd.DataFrame({"Field": ["Company", "Ticker", "Market", "Timeframe", "Latest bar", "Patterns found", "Disclaimer"],
+                      "Value": [company, ticker, MARKETS[market]["label"], tf.label, f"{last_date:%Y-%m-%d}",
                                 ", ".join(pattern_name(p) for p in firing) or "None", DISCLAIMER]}
                      ).to_excel(xw, sheet_name="Summary", index=False)
         pd.DataFrame(summary_rows).to_excel(xw, sheet_name="What happened before", index=False)
         checked.to_excel(xw, sheet_name="Patterns checked", index=False)
         evidence.to_excel(xw, sheet_name="Past cases", index=False)
     e1, e2, _ = st.columns([1, 1, 2])
-    e1.download_button("⬇ Excel", buf.getvalue(), file_name=f"{ticker}_pattern_evidence_{last_date:%Y%m%d}.xlsx",
+    e1.download_button("⬇ Excel", buf.getvalue(),
+                       file_name=f"{ticker}_{tf.key}_pattern_evidence_{last_date:%Y%m%d}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
     e2.download_button("⬇ CSV", evidence.to_csv(index=False).encode(),
-                       file_name=f"{ticker}_past_cases_{last_date:%Y%m%d}.csv", mime="text/csv", width="stretch")
+                       file_name=f"{ticker}_{tf.key}_past_cases_{last_date:%Y%m%d}.csv", mime="text/csv",
+                       width="stretch")
 
 footer()
