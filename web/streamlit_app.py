@@ -169,116 +169,164 @@ def method_text(ticker: str, horizon: int, o: dict) -> str:
 
 
 
-# ── Look and feel ───────────────────────────────────────────────────────────
+# ── Look and feel: Indigo ────────────────────────────────────────────────────
+LOGO_MARK = ('<svg viewBox="0 0 40 40" width="{s}" height="{s}"><path d="M20 4 A16 16 0 1 0 36 20" fill="none" '
+             'stroke="var(--acc)" stroke-width="3.5" stroke-linecap="round"/><path d="M36 13 L36 20 L29 20" '
+             'fill="none" stroke="var(--acc)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>'
+             '<circle cx="14" cy="25" r="3" fill="var(--acc2)"/><circle cx="20" cy="20" r="3" fill="var(--acc2)"/>'
+             '<circle cx="26" cy="14" r="3" fill="var(--acc2)"/></svg>')
+THEMES = {  # accent, second accent, soft tint, page wash
+    "US": ("#6D5EF5", "#FF7A59", "#F0EEFF", "#E9E6FF", "#F7F6FF"),
+    "India": ("#E8590C", "#6D5EF5", "#FFF0E6", "#FFE8D9", "#FFF9F5"),
+}
+
+
+def tip(text: str) -> str:
+    """A small ⓘ that opens on tap or click (works on phones, no hover needed)."""
+    return f'<details class="tip"><summary>i</summary><div>{text}</div></details>'
+
+
+def donut(up: float, down: float, size: int = 190) -> str:
+    r = size / 2 - 14
+    c = 2 * 3.14159 * r
+    big, lab, col = (up, "went up", "var(--up)") if up >= down else (down, "went down", "var(--down)")
+    return (f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" style="display:block;margin:auto">'
+            f'<circle cx="{size/2}" cy="{size/2}" r="{r}" fill="none" stroke="var(--tint)" stroke-width="18"/>'
+            f'<circle cx="{size/2}" cy="{size/2}" r="{r}" fill="none" stroke="var(--up)" stroke-width="18" '
+            f'stroke-dasharray="{c*up:.1f} {c:.1f}" transform="rotate(-90 {size/2} {size/2})"/>'
+            f'<circle cx="{size/2}" cy="{size/2}" r="{r}" fill="none" stroke="var(--down)" stroke-width="18" '
+            f'stroke-dasharray="{c*down:.1f} {c:.1f}" stroke-dashoffset="{-c*(up+0.01):.1f}" '
+            f'transform="rotate(-90 {size/2} {size/2})"/>'
+            f'<text x="50%" y="48%" text-anchor="middle" font-size="{size*0.2:.0f}" font-weight="800" fill="{col}">'
+            f'{big:.0%}</text><text x="50%" y="63%" text-anchor="middle" font-size="{size*0.075:.0f}" '
+            f'fill="var(--muted)">{lab}</text></svg>')
+
+
+def ladder(pl: dict) -> str:
+    short = pl["direction"] == "SHORT"
+    rows = [("Stop", pl["stop"], "var(--down)"), ("Entry", pl["entry"], "var(--acc)"),
+            ("Target", pl["target"], "var(--up)")]
+    if not short:
+        rows = rows[::-1]
+    ys = [16, 62, 118] if short else [16, 72, 118]
+    y_entry = ys[1]
+    out = ""
+    for (lab, val, col), y in zip(rows, ys):
+        dash = "0" if lab == "Entry" else "5 4"
+        out += (f'<line x1="70" x2="196" y1="{y}" y2="{y}" stroke="{col}" stroke-width="2.5" stroke-dasharray="{dash}"/>'
+                f'<text x="0" y="{y+4}" font-size="12" fill="var(--muted)">{lab}</text>'
+                f'<text x="204" y="{y+5}" font-size="15" font-weight="700" fill="var(--text)">{val:,.2f}</text>')
+    y_stop = ys[0] if short else ys[2]
+    y_tgt = ys[2] if short else ys[0]
+    out += (f'<rect x="120" y="{min(y_stop, y_entry)}" width="26" height="{abs(y_entry - y_stop)}" fill="var(--down)" opacity=".16"/>'
+            f'<rect x="120" y="{min(y_tgt, y_entry)}" width="26" height="{abs(y_entry - y_tgt)}" fill="var(--up)" opacity=".18"/>'
+            f'<path d="M133 {y_entry + (4 if short else -4)} L133 {y_tgt + (-6 if short else 6)}" stroke="var(--text)" '
+            'stroke-width="1.5" marker-end="url(#ar)"/>')
+    return ('<svg viewBox="0 0 270 132" width="100%" style="max-width:320px;display:block"><defs><marker id="ar" '
+            'markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" '
+            f'fill="var(--text)"/></marker></defs>{out}</svg>')
+
+
+def conf_dots(n_ind: int, conf: int) -> str:
+    return "".join(f'<span class="cd {"on" if i < n_ind else ("own" if i < conf else "")}"></span>' for i in range(5))
+
+
 st.markdown("""<style>
-:root{--slate:#24414A;--teal:#2F7F86;--sea:#6FB3B0;--mist:#EEF5F2;--line:#D7E5E1;--muted:#5E7479;
-      --green:#2E8B62;--red:#B8574B;--amber:#B7832F}
-.block-container{padding-top:1.2rem!important;padding-bottom:1rem!important;max-width:1120px}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{--acc:#6D5EF5;--acc2:#FF7A59;--tint:#F0EEFF;--wash:#E9E6FF;--text:#1E1B4B;--muted:#6B6A8A;
+      --up:#12B886;--down:#FF6B6B;--line:#E4E1FB;--card:#FFFFFF;--page:#F7F6FF}
+.stApp, .stApp *:not([data-testid="stIconMaterial"]):not(.material-symbols-rounded){font-family:Inter,sans-serif!important}
+.stApp{background:linear-gradient(180deg,var(--wash) 0,var(--page) 380px,var(--page) 100%)!important}
+.block-container{padding-top:1rem!important;padding-bottom:1rem!important;max-width:1140px}
 header[data-testid="stHeader"]{display:none}
-.tph-logo img{height:44px;width:auto;display:block;margin-top:2px}
-.st-key-topbar{border-bottom:1px solid var(--line);padding-bottom:.6rem;margin-bottom:.4rem}
-.st-key-answer{border-top:4px solid var(--teal)!important;background:#fff}
-.tph-strip{margin-bottom:6px;display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:12px;font-size:15px;line-height:1.35}
-.tph-strip.done{background:#E4F2EC;border:1px solid #BFDCCF;color:var(--slate)}
-.tph-strip.busy{background:#fff;border:1px solid var(--line)}
-.tph-tick{width:26px;height:26px;border-radius:50%;background:var(--green);color:#fff;display:flex;
-          align-items:center;justify-content:center;font-weight:700;flex:none}
-.tph-spin{width:24px;height:24px;border-radius:50%;border:3px solid var(--mist);border-top-color:var(--teal);
-          animation:tphspin .8s linear infinite;flex:none}
-@keyframes tphspin{to{transform:rotate(360deg)}}
-.tph-bar{height:6px;background:var(--mist);border-radius:3px;overflow:hidden;margin-top:6px;position:relative}
-.tph-bar i{position:absolute;height:100%;width:35%;background:var(--teal);border-radius:3px;animation:tphbar 1.4s ease-in-out infinite}
-@keyframes tphbar{0%{left:-35%}100%{left:100%}}
-.tph-co h2{font-size:1.7rem;font-weight:700;margin:0;padding:0;line-height:1.2;color:var(--slate)!important}
-.tph-co h2 span{color:var(--muted);font-weight:500}
-.tph-meta{color:var(--muted);font-size:.85rem;margin-top:2px}
-.tph-chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px}
-.tph-chip{font-size:.8rem;padding:4px 10px;border-radius:20px;background:var(--mist);color:var(--slate);font-weight:500}
-.tph-chip.down{background:#F6E3E0;color:var(--red)} .tph-chip.up{background:#E4F2EC;color:var(--green)}
-.tph-verdict{display:flex;gap:12px;align-items:center;border-radius:10px;padding:12px;margin:10px 0 6px;font-size:.9rem}
-.tph-verdict.SKIP{background:#FBF5EA;color:#6B5A3A} .tph-verdict.TAKE{background:#E4F2EC;color:#24513F}
-.tph-verdict.NONE{background:var(--mist);color:var(--slate)}
-.tph-badge{font-weight:800;font-size:.8rem;letter-spacing:.06em;padding:6px 11px;border-radius:8px;color:#fff;flex:none}
-.tph-badge.SKIP{background:var(--amber)} .tph-badge.TAKE{background:var(--green)} .tph-badge.NONE{background:var(--muted)}
-.tph-label{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:4px}
-.tph-split{height:10px;border-radius:5px;display:flex;overflow:hidden;margin:4px 0 6px;background:#ddd}
-.tph-tag{font-size:.75rem;font-weight:600;padding:3px 9px;border-radius:6px;white-space:nowrap}
-.tph-tag.SHORT{background:#F6E3E0;color:var(--red)} .tph-tag.LONG{background:#E4F2EC;color:var(--green)}
-.tph-hyp{font-size:.8rem;color:var(--muted);background:var(--mist);border-radius:8px;padding:6px 10px;margin:2px 0 8px}
-.tph-foot{color:var(--muted);font-size:.8rem;text-align:center;padding:18px 8px 4px;border-top:1px solid var(--line);margin-top:24px}
-.tph-hero h1{font-size:1.6rem;margin:.6rem 0 .2rem;padding:0;color:var(--slate)}
-[data-testid="stMetricValue"]{font-weight:700}
-.st-key-bull [data-testid="stMetricValue"]{color:var(--green)} .st-key-bear [data-testid="stMetricValue"]{color:var(--red)}
-@media (max-width:640px){.tph-co h2{font-size:1.35rem}.tph-logo img{height:36px}
-  .st-key-stats [data-testid="stHorizontalBlock"],.st-key-plan [data-testid="stHorizontalBlock"]{flex-wrap:nowrap;gap:.6rem}
-  .st-key-stats [data-testid="stColumn"],.st-key-plan [data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:1 1 0!important}
-  [data-testid="stMetricValue"]{font-size:1.55rem}}
-.tph-tiles{display:grid;gap:10px;margin:6px 0 8px}
-.tph-tiles.c3{grid-template-columns:repeat(3,minmax(0,1fr))} .tph-tiles.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
-.tph-tile{background:var(--mist);border-radius:10px;padding:10px 12px}
-.tph-tl{font-size:.78rem;color:var(--muted);font-weight:600}
-.tph-tv{font-size:1.7rem;font-weight:700;color:var(--slate);line-height:1.2}
-.tph-tv.g{color:var(--green)} .tph-tv.r{color:var(--red)}
-.tph-tn{font-size:.76rem;color:var(--muted);line-height:1.3;margin-top:2px}
-.tph-box{border-radius:10px;padding:12px 14px;margin:10px 0 6px;font-size:.92rem;line-height:1.45}
-.tph-box.find{background:var(--mist)}
-.tph-box h4{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 4px;padding:0}
-.tph-short{font-size:.95rem;background:#fff;border-left:4px solid var(--teal);padding:8px 12px;margin:6px 0}
-.tph-ctx{font-size:.8rem;color:var(--muted);line-height:1.45;margin-top:4px}
-.tph-ctx b{color:var(--slate)}
-.tph-band{border-radius:8px;padding:6px 12px;font-size:.85rem;font-weight:600;margin:2px 0 10px}
-.tph-next{font-size:.95rem;color:var(--muted);padding:8px 12px;border:1px dashed var(--line);border-radius:10px}
-.tph-conf{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:4px 0 10px;font-size:.85rem;line-height:1.45}
-.tph-conf h4{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 4px;padding:0}
-.tph-conf ul{list-style:none;margin:6px 0;padding:0} .tph-conf li{margin:2px 0}
-.tph-conf li span:last-child{color:var(--muted);font-size:.78rem;margin-left:4px}
-.tph-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}
-.tph-dot.ind{background:var(--green)} .tph-dot.own{background:#C9D6D3}
-@media (max-width:640px){.tph-verdict{flex-direction:column;align-items:flex-start}.tph-tv{font-size:1.35rem}.tph-tiles{gap:6px}.tph-tile{padding:8px}}
+.st-key-topbar{padding-bottom:.4rem}
+.st-key-topbar label p{font-size:.72rem!important;font-weight:600;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.logo{display:flex;align-items:center;gap:8px;font-size:1.45rem;letter-spacing:-.01em;padding-top:14px}
+.logo b{color:var(--text);font-weight:700} .logo span{color:var(--acc);font-weight:400}
+button[data-variant="segmented_control"]{border-radius:999px!important;border:0!important;background:#fff!important;
+  font-weight:600!important;color:var(--muted)!important}
+button[data-variant="segmented_control"][aria-checked="true"]{background:var(--acc)!important;color:#fff!important}
+button[data-variant="segmented_control"][aria-checked="true"] *{color:#fff!important}
+[data-testid="stBaseButton-primaryFormSubmit"],[data-testid="stBaseButton-primary"]{background:var(--acc)!important;
+  border:0!important;border-radius:999px!important;font-weight:700!important;height:2.75rem}
+[data-testid="stTextInput"] input{border-radius:999px!important;height:2.75rem;font-weight:600;background:#fff!important}
+[data-testid="stTextInput"] div[data-baseweb="input"]{border-radius:999px!important;border-color:var(--line)!important;background:#fff!important}
+.st-key-chartcard{background:#fff;border-radius:22px;padding:20px 22px!important;box-shadow:0 10px 30px rgba(109,94,245,.10)}
+.start{color:var(--muted);font-size:.95rem;padding:30px 0 0}
+.chipok{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;color:var(--up);background:#fff;
+  padding:7px 14px;border-radius:999px;box-shadow:0 2px 10px rgba(109,94,245,.08)}
+.busy{display:flex;align-items:center;gap:12px;background:#fff;border-radius:18px;padding:14px 18px;box-shadow:0 10px 30px rgba(109,94,245,.10)}
+.spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--tint);border-top-color:var(--acc);animation:sp .8s linear infinite;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+.eyebrow{font-size:.9rem;color:var(--muted);display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.eyebrow b{color:var(--text)}
+.headline{font-size:2.9rem;line-height:1.08;font-weight:800;letter-spacing:-.025em;color:var(--text);margin:10px 0 10px}
+.headline em{font-style:normal}
+.sub{color:var(--muted);font-size:1.02rem}
+.card{background:var(--card);border-radius:22px;padding:20px 22px;box-shadow:0 10px 30px rgba(109,94,245,.10);height:100%}
+.lab{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:10px;
+  display:flex;align-items:center;gap:6px}
+.big{font-size:1.25rem;font-weight:800;color:var(--text);display:flex;gap:8px;align-items:center;line-height:1.25}
+.small{color:var(--muted);font-size:.88rem;margin-top:6px;line-height:1.4}
+.pillv{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:10px;font-weight:700;font-size:.85rem}
+.pillv.pass{background:#FFE9E9;color:#E03131} .pillv.take{background:#E6FCF5;color:#0CA678} .pillv.none{background:var(--tint);color:var(--text)}
+.pillv.hist{background:#fff;color:var(--text);box-shadow:0 2px 10px rgba(109,94,245,.08)}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-size:.8rem;font-weight:600;padding:6px 11px;border-radius:999px;background:var(--tint);color:var(--text)}
+details.tip{display:inline-block;position:relative}
+details.tip summary{list-style:none;cursor:pointer;width:17px;height:17px;border-radius:50%;border:1.5px solid var(--muted);
+  color:var(--muted);font:700 10px Inter;display:flex;align-items:center;justify-content:center;text-transform:none;letter-spacing:0}
+details.tip summary::-webkit-details-marker{display:none}
+details.tip[open] summary{background:var(--acc);border-color:var(--acc);color:#fff}
+details.tip div{position:absolute;z-index:20;top:24px;left:-10px;width:min(300px,78vw);background:var(--text);color:#fff;
+  font-size:.82rem;font-weight:400;line-height:1.45;padding:12px 14px;border-radius:12px;text-transform:none;letter-spacing:0;
+  box-shadow:0 12px 30px rgba(30,27,75,.25)}
+.cd{display:inline-block;width:13px;height:13px;border-radius:50%;margin-right:4px;border:2px solid var(--acc)}
+.cd.on{background:var(--acc)} .cd.own{background:var(--tint)}
+.num{font-size:1.35rem;font-weight:800;color:var(--text)}
+.legend{display:flex;gap:14px;font-size:.75rem;color:var(--muted);margin-top:4px;flex-wrap:wrap}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+.tph-conf h4{color:#C9C3F7;font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px;padding:0}
+.tph-conf ul{list-style:none;margin:6px 0;padding:0} .tph-conf li{margin:3px 0}
+.tph-conf li span:last-child{color:#C9C3F7;font-size:.75rem;margin-left:4px}
+.tph-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.tph-dot.ind{background:#12B886} .tph-dot.own{background:#8B86C9}
+.conf .k{color:#C9C3F7;font-size:.75rem;margin-left:4px}
+.foot{text-align:center;font-size:.8rem;color:var(--muted);padding:22px 8px 6px;display:flex;gap:6px;justify-content:center;align-items:center}
+[data-testid="stExpander"]{background:#fff;border:0!important;border-radius:18px!important;box-shadow:0 10px 30px rgba(109,94,245,.08)}
+[data-testid="stExpander"] summary p{font-weight:600;color:var(--text)}
+[data-testid="stPopover"] button{border-radius:999px!important}
+.st-key-pick label p{font-size:.7rem!important;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700}
+@media (max-width:640px){.headline{font-size:1.9rem}.logo{font-size:1.25rem;padding-top:0}.card{padding:16px}
+  .st-key-hero [data-testid="stHorizontalBlock"]{gap:.8rem}}
 </style>""", unsafe_allow_html=True)
 
 
 def footer() -> None:
-    st.markdown(f'<div class="tph-foot">{esc(DISCLAIMER)}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="foot">Education only · past patterns don\'t guarantee the future · not investment advice '
+                + tip(esc(DISCLAIMER)) + '</div>', unsafe_allow_html=True)
 
 
-# ── Top bar: logo, then country, then search ─────────────────────────────────
-THEMES = {  # accent, deep accent, soft tint, band colour, band text
-    "US": ("#2F7F86", "#24414A", "#EEF5F2", "#E3EFEC", "🇺🇸  US market · NYSE & Nasdaq · prices in $"),
-    "India": ("#C46A1C", "#6B3A12", "#FBF1E6", "#F8E6D2", "🇮🇳  India market · NSE · prices in ₹"),
-}
+# ── Top bar: logo, country, then search ─────────────────────────────────────
 with st.container(key="topbar"):
-    c_logo, c_mkt, c_search = st.columns([1.15, 0.9, 1.9], vertical_alignment="bottom")
-    c_logo.markdown(f'<div class="tph-logo"><img src="data:image/png;base64,{_b64("logo.png")}" '
-                    'alt="ThePatternHistory"></div>', unsafe_allow_html=True)
-    market = c_mkt.segmented_control(
-        "1. Choose a market", list(MARKETS), default=None, format_func=lambda m: MARKETS[m]["label"],
-        key="market",
-    )
+    c_logo, c_mkt, c_search = st.columns([1.1, 0.8, 2.0], vertical_alignment="bottom")
+    c_logo.markdown(f'<div class="logo">{LOGO_MARK.format(s=34)}<b>pattern</b><span>history</span></div>',
+                    unsafe_allow_html=True)
+    market = c_mkt.segmented_control("Market", list(MARKETS), default=None,
+                                     format_func=lambda m: "US" if m == "US" else "India", key="market")
     query, submitted = "", False
     if market:
         with c_search.form("scan", border=False):
-            f1, f2 = st.columns([4, 1.2], vertical_alignment="bottom", gap="small")
-            query = f1.text_input(
-                "2. Type a ticker or company name",
-                placeholder="e.g. MU or Micron" if market == "US" else "e.g. SBIN or State Bank of India",
-            )
+            f1, f2 = st.columns([4, 1], vertical_alignment="bottom", gap="small")
+            query = f1.text_input("Stock", placeholder="Ticker or company, e.g. MU" if market == "US"
+                                  else "NSE symbol or company, e.g. SBIN")
             submitted = f2.form_submit_button("Scan", type="primary", width="stretch")
     else:
-        c_search.markdown('<div class="tph-next">← Start here: choose <b>US</b> or <b>India</b>, '
-                          'then the search box appears.</div>', unsafe_allow_html=True)
+        c_search.markdown('<div class="start">← Pick a market to start</div>', unsafe_allow_html=True)
 
-if market:
-    acc, deep, tint, band, band_text = THEMES[market]
-    st.markdown(f"""<style>
-:root{{--teal:{acc};--slate:{deep};--mist:{tint}}}
-.st-key-topbar{{border-bottom:3px solid {acc}!important}}
-[data-testid="stBaseButton-primaryFormSubmit"]{{background:{acc}!important;border-color:{acc}!important}}
-button[data-variant="segmented_control"][aria-checked="true"]{{background:{tint}!important;color:{acc}!important;border-color:{acc}!important}}
-button[data-variant="segmented_control"][aria-checked="true"] *{{color:{acc}!important}}
-.stTabs [aria-selected="true"]{{color:{acc}!important}} .stTabs [data-baseweb="tab-highlight"]{{background:{acc}!important}}
-</style><div class="tph-band" style="background:{band};color:{deep}">{band_text}</div>""",
-                unsafe_allow_html=True)
+acc, acc2, tint, wash, page = THEMES[market or "US"]
+st.markdown(f"<style>:root{{--acc:{acc};--acc2:{acc2};--tint:{tint};--wash:{wash};--page:{page}}}</style>",
+            unsafe_allow_html=True)
 
 if submitted and query.strip():
     st.session_state["query"] = (query.strip(), market)
@@ -286,67 +334,48 @@ if submitted and query.strip():
 q, q_market = st.session_state.get("query", ("", market))
 if not market or not q or q_market != market:
     st.markdown(
-        '<div class="tph-hero"><h1>What happened every time this pattern showed up before?</h1></div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "Traders look for repeating shapes in price charts, called **patterns**. This site checks a stock for "
-        "10 well-known patterns today, then looks up **every past day the same pattern showed up** in ~25 years "
-        "of that stock's prices, and shows you what the price did next.\n\n"
-        "**How to use it:** first choose **US** or **India** at the top, then type a ticker or company name "
-        "and press **Scan**.\n\n"
-        "**What you'll see:**\n"
-        "1. **Today's pattern**: which pattern (if any) showed up, and what it means.\n"
-        "2. **What happened before**: how often the price went up or down afterwards, in the stock's own past.\n"
-        "3. **A hypothetical trade**: what a trade could look like if someone followed a fixed set of rules. "
-        "It's an illustration, not advice."
-    )
-    st.caption("US tickers work as-is (AAPL, BRK-B). For India type the NSE symbol (SBIN) or the company name; "
-               "no suffix needed.")
+        '<div class="eyebrow">25 years of prices · 10 chart patterns · US &amp; India</div>'
+        '<div class="headline">What happened every time<br>this pattern showed up before?</div>'
+        '<div class="sub">Pick a market, type a stock, see the history. '
+        + tip("We check a stock for 10 well-known chart patterns on the latest day, then look up every past day the "
+              "same pattern showed up in ~25 years of that stock's prices, and show what the price did next. US tickers "
+              "work as-is (AAPL, BRK-B). For India type the NSE symbol (SBIN) or the company name.")
+        + '</div>', unsafe_allow_html=True)
     footer()
     st.stop()
 
-# ── Scan: resolve the name, load data, show a clear busy / done state ──────
+# ── Scan ────────────────────────────────────────────────────────────────────
 strip = st.empty()
 
 
-def busy(text: str, sub: str) -> None:
-    strip.markdown(
-        f'<div class="tph-strip busy"><span class="tph-spin"></span><div style="flex:1"><b>{esc(text)}</b>'
-        f'<div style="color:var(--muted);font-size:.85rem">{esc(sub)}</div>'
-        '<div class="tph-bar"><i></i></div></div></div>', unsafe_allow_html=True)
+def busy(text: str) -> None:
+    strip.markdown(f'<div class="busy"><span class="spin"></span><b>{esc(text)}</b>'
+                   '<span style="color:var(--muted);font-size:.85rem">first scan of a stock takes ~30–60s</span></div>',
+                   unsafe_allow_html=True)
 
 
-busy(f"Finding '{q}'…", f"Looking it up on {MARKETS[market]['label']}")
+busy(f"Finding '{q}'…")
 candidates, best = get_candidates(q, market)
 if not candidates:
-    strip.error(f"Couldn't find '{q}' on {MARKETS[market]['label']}. Try the ticker symbol, or switch market.")
+    strip.error(f"Couldn't find '{q}' in {'US' if market == 'US' else 'India (NSE)'}. Try the ticker symbol.")
     footer()
     st.stop()
-
 pick_key = f"pick::{market}::{q}"
 choice = st.session_state.get(pick_key, best)
 choice = choice if 0 <= choice < len(candidates) else best
-ticker = candidates[choice]["symbol"]
-company = candidates[choice]["name"]
+ticker, company = candidates[choice]["symbol"], candidates[choice]["name"]
 
-busy(f"Scanning {company} ({ticker})…",
-     "Loading ~25 years of daily prices and checking every pattern on every day. "
-     "The first scan of a stock takes ~30–60s; repeat scans are instant.")
+busy(f"Scanning {company} ({ticker})…")
 try:
     prices, hist = get_history(ticker)
 except ProviderBusy as e:
-    strip.error(str(e))
-    footer()
-    st.stop()
+    strip.error(str(e)); footer(); st.stop()
 except DataError as e:
-    strip.error(str(e) if market == "US" else f"No price data found for {ticker} on NSE. Check the symbol or try the company name.")
-    footer()
-    st.stop()
+    strip.error(str(e) if market == "US" else f"No price data found for {ticker} on NSE.")
+    footer(); st.stop()
 except Exception as e:
-    strip.error(f"Couldn't load data right now. Please try again in a minute. (Details: {e})")
-    footer()
-    st.stop()
+    strip.error(f"Couldn't load data right now. Please try again in a minute. ({e})")
+    footer(); st.stop()
 
 last_date = prices.index[-1]
 last_close = float(prices["close"].iloc[-1])
@@ -365,294 +394,237 @@ def pattern_name(pattern: str) -> str:
 
 
 with strip.container():
-    s1, s2 = st.columns([5, 1.3], vertical_alignment="center") if len(candidates) > 1 else (st.container(), None)
-    s1.markdown(
-        f'<div class="tph-strip done"><span class="tph-tick">✓</span><span><b>Scan complete:</b> '
-        f'{esc(company)} ({esc(ticker)}) · {len(prices):,} days checked</span></div>', unsafe_allow_html=True)
-    if s2 is not None:
-        with s2.popover("Not this company?", width="stretch"):
-            st.radio(
-                "Other matches", range(len(candidates)), index=choice, key=pick_key,
-                format_func=lambda i: f"{candidates[i]['symbol']} — {candidates[i]['name']}",
-            )
+    a, b = st.columns([4, 1.2], vertical_alignment="center") if len(candidates) > 1 else (st.container(), None)
+    a.markdown(f'<span class="chipok">✓ Scanned {esc(ticker)} · {len(prices):,} days</span>', unsafe_allow_html=True)
+    if b is not None:
+        with b.popover("Not this company?", width="stretch"):
+            st.radio("Other matches", range(len(candidates)), index=choice, key=pick_key,
+                     format_func=lambda i: f"{candidates[i]['symbol']} — {candidates[i]['name']}")
 
-# ── Answer card ─────────────────────────────────────────────────────────────
-with st.container(border=True, key="answer"):
-    left, right = st.columns([1.1, 1], gap="large")
-
-    with left:
-        trend, tech, bow = str(context["trend"]), str(context["technical"]), str(context["bow_tie"])
-        tcls = "down" if "DOWN" in trend else "up" if "UP" in trend else ""
-        ctx = []
-        if trend in TREND_TEXT:
-            ctx.append(f"<b>Trend {esc(trend.replace('_', ' ').lower())}:</b> {esc(TREND_TEXT[trend])}.")
-        if tech in POSITION_TEXT:
-            ctx.append(f"<b>Position {esc(tech.lower())}:</b> {esc(POSITION_TEXT[tech])}.")
-        if bow in BOWTIE_TEXT:
-            ctx.append(f"<b>Bow tie {esc(bow.lower())}:</b> {esc(BOWTIE_TEXT[bow])}.")
-        st.markdown(
-            f'<div class="tph-co"><h2 style="color:var(--slate);font-weight:700">{esc(company)} '
-            f'<span style="color:#5E7479;font-weight:500">{esc(ticker)}</span></h2>'
-            f'<div class="tph-meta">Last close {currency}{last_close:,.2f} on {last_date:%d %b %Y} · '
-            f'{len(prices):,} days of prices since {prices.index[0]:%b %Y}</div>'
-            f'<div class="tph-chips"><span class="tph-chip {tcls}">Trend: {esc(trend.replace("_", " "))}</span>'
-            f'<span class="tph-chip">Position: {esc(tech)}</span>'
-            f'<span class="tph-chip">Bow tie: {esc(bow)}</span></div>'
-            f'<div class="tph-ctx">{" ".join(ctx)}</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        # What we found today
-        if not firing:
-            found = (f"<b>No pattern today.</b> None of our 10 patterns showed up on {esc(ticker)}'s chart on the "
-                     "latest day. That's normal: most days have none. Try another stock, or come back tomorrow.")
-        elif len(firing) == 1:
-            p = firing[0]
-            found = (f"We found <b>1 pattern</b> on {esc(ticker)}'s chart today: <b>{esc(pattern_name(p))}</b>, "
-                     f"which {esc(points(dir_of[p]))}.<br>"
-                     f"<span style='color:var(--muted)'>What it is: {esc(RULE_DESC[rule_of[p]])}</span>")
-        else:
-            items = "".join(f"<li><b>{esc(pattern_name(p))}</b>, which {esc(points(dir_of[p]))}</li>" for p in firing)
-            found = (f"We found <b>{len(firing)} patterns</b> on {esc(ticker)}'s chart today:"
-                     f"<ul style='margin:4px 0 0 18px;padding:0'>{items}</ul>"
-                     "<span style='color:var(--muted)'>Each one has its own tab below with what it means.</span>")
-        st.markdown(f'<div class="tph-box find"><h4>Today\'s pattern</h4>{found}</div>', unsafe_allow_html=True)
-
-        # Would the rules act on it?
-        if plans:
-            top = plans[0]
-            kind = top["decision"]
-            badge = "WOULD ACT" if kind == "TAKE" else "WOULD PASS"
-            text = (f"Looking at the strongest pattern today ({pattern_name(top['pattern'])}): "
-                    + plain_reason(top, currency))
-            st.markdown(
-                f'<div class="tph-verdict {kind}"><span class="tph-badge {kind}">{badge}</span><span>'
-                f'<b>Would these trading rules act on it?</b><br>{esc(text)}</span></div>',
-                unsafe_allow_html=True)
-            st.caption("We test every pattern against one fixed set of trading rules, so you can see how a "
-                       "disciplined approach would treat it. It is not a recommendation to buy or sell.")
-
-    with right:
-        st.markdown('<div class="tph-label">What happened after this pattern in the past</div>',
-                    unsafe_allow_html=True)
-        horizon = st.segmented_control(
-            "Look ahead", HORIZONS, default=20, format_func=lambda h: HZ[h], key="horizon",
-            help="How far after each past pattern we checked the price.",
-        ) or 20
-        o = outlook(hist, last_date, horizon)
-        tip = method_text(ticker, horizon, o)
-        n = o["sample"]
+# ── Hero: one sentence + donut ──────────────────────────────────────────────
+horizon = st.session_state.get("horizon") or 20
+o = outlook(hist, last_date, horizon)
+n = o["sample"]
+trend = str(context["trend"])
+arrow = '<span style="color:var(--down)">▼</span>' if "DOWN" in trend else (
+    '<span style="color:var(--up)">▲</span>' if "UP" in trend else "")
+with st.container(key="hero"):
+    h_left, h_right = st.columns([1.55, 1], gap="large", vertical_alignment="center")
+    with h_left:
         if o["status"] == "unknown":
-            st.markdown('<div class="tph-short">No pattern today, so there is nothing in the past to compare '
-                        'with. We only show history when a pattern shows up.</div>', unsafe_allow_html=True)
+            line = f"No pattern on {esc(ticker)} today."
+            sub = "Most days have none. History appears when a pattern does."
         elif not n:
-            st.markdown(f'<div class="tph-short">This pattern has never shown up before on {esc(ticker)} with a '
-                        'known outcome, so there is no history to go on.</div>', unsafe_allow_html=True)
+            line = f"This pattern is new for {esc(ticker)}."
+            sub = "It has never shown up before with a known outcome, so there's no history yet."
         else:
-            k_up, k_dn = round(o["bullish"] * n), round(o["bearish"] * n)
-            tiles([
-                tile(share(o["bullish"]), "Went up", f"Price was higher {HZ[horizon]} later", "g"),
-                tile(share(o["bearish"]), "Went down", f"Price was lower {HZ[horizon]} later", "r"),
-                tile(f"{n}", "Past cases", f"Times this pattern showed up before on {ticker}"),
-            ])
-            st.markdown(f'<div class="tph-split"><i style="width:{o["bullish"] * 100:.1f}%;background:var(--green)"></i>'
-                        f'<span style="flex:1"></span><i style="width:{o["bearish"] * 100:.1f}%;background:var(--red)">'
-                        '</i></div>', unsafe_allow_html=True)
+            upish = o["bullish"] >= o["bearish"]
+            word, val, col = ("rose", o["bullish"], "var(--up)") if upish else ("fell", o["bearish"], "var(--down)")
+            line = (f'After this pattern, {esc(ticker)} {word} <em style="color:{col}">{val:.0%}</em> of the time.')
             dirs = {dir_of[p] for p in o["patterns"] if p in dir_of}
-            verdict = ""
+            way = ("points up" if dirs == {"LONG"} else "points down" if dirs == {"SHORT"} else "is mixed")
+            sub = f"{n} past cases · checked {HZ[horizon]} later · today's pattern {way}"
+        st.markdown(f'<div class="eyebrow"><b>{esc(ticker)}</b>{esc(company)} · {currency}{last_close:,.2f} {arrow}</div>'
+                    f'<div class="headline">{line}</div><div class="sub">{sub}</div>', unsafe_allow_html=True)
+        r1, r2 = st.columns([1, 1.3], vertical_alignment="center")
+        r1.segmented_control("Look ahead", HORIZONS, default=20, format_func=lambda h: HZ[h].replace(" ", "")
+                             .replace("1day", "1D").replace("1week", "1W").replace("1month", "1M").replace("3months", "3M"),
+                             key="horizon", label_visibility="collapsed")
+        if n and o["status"] != "unknown":
+            dirs = {dir_of[p] for p in o["patterns"] if p in dir_of}
             if len(dirs) == 1:
                 agree = o["bullish"] if dirs == {"LONG"} else o["bearish"]
-                verdict = (" So history has mostly agreed with today's pattern." if agree >= 0.55 else
-                           " So history has more often gone against today's pattern." if agree <= 0.45 else
-                           " So history is close to a coin flip here.")
-            st.markdown(f'<div class="tph-short"><b>In short:</b> in {k_up} of {n} past cases, {esc(ticker)}\'s price '
-                        f'was higher {HZ[horizon]} later, and in {k_dn} it was lower.{esc(verdict)}</div>',
+                verdict = ("History mostly agreed with it" if agree >= 0.55 else
+                           "History mostly went against it" if agree <= 0.45 else "History is a coin flip here")
+                k_up, k_dn = round(o["bullish"] * n), round(o["bearish"] * n)
+                r2.markdown(f'<div class="pillv hist">{verdict} ' + tip(
+                    f"In {k_up} of {n} past cases {esc(ticker)}'s price was higher {HZ[horizon]} later, and in {k_dn} it "
+                    f"was lower. Today's pattern {('points up' if dirs == {'LONG'} else 'points down')}, so that is how "
+                    "often history agreed with it.") + "</div>", unsafe_allow_html=True)
+        if n and n < SMALL_SAMPLE:
+            st.caption(f"Only {n} past cases: too few to read much into.")
+    with h_right:
+        if n and o["status"] != "unknown":
+            st.markdown(f'<div class="card" style="padding:24px">{donut(o["bullish"], o["bearish"])}'
+                        f'<div class="legend" style="justify-content:center;margin-top:10px">'
+                        f'<span><i style="background:var(--up)"></i>up {o["bullish"]:.0%}</span>'
+                        f'<span><i style="background:var(--down)"></i>down {o["bearish"]:.0%}</span>'
+                        f'<span>{tip(esc(method_text(ticker, horizon, o)))}</span></div></div>',
                         unsafe_allow_html=True)
-            if n < SMALL_SAMPLE:
-                st.warning(f"Only {n} past case(s): too few to read much into. Treat these percentages as anecdotes.")
-        with st.expander("How is this calculated?"):
-            st.write(tip)
 
-# ── Tabs: one per pattern found today, then all patterns, then download ────
-names = [pattern_name(p) for p in firing]
-tab_names = [f"{nm} ({friendly(p)})" if names.count(nm) > 1 else nm for nm, p in zip(names, firing)]
-tabs = st.tabs(tab_names + ["All 10 patterns", "Download"])
+# ── Three cards ─────────────────────────────────────────────────────────────
+st.write("")
+k1, k2, k3 = st.columns(3)
+if firing:
+    p0 = firing[0]
+    more = f" +{len(firing) - 1} more" if len(firing) > 1 else ""
+    sign_n = len(split_factors(p0, today[today["pattern"] == p0]["factors"].iloc[0])[1])
+    arrow0 = '<span style="color:var(--up)">↑</span>' if dir_of[p0] == "LONG" else '<span style="color:var(--down)">↓</span>'
+    k1.markdown(f'<div class="card"><div class="lab">Today\'s pattern {tip(esc(RULE_DESC[rule_of[p0]]))}</div>'
+                f'<div class="big">{arrow0} {esc(pattern_name(p0))}</div>'
+                f'<div class="small">{"Points up" if dir_of[p0] == "LONG" else "Points down"} · {sign_n} supporting '
+                f'sign{"s" if sign_n != 1 else ""}{esc(more)}</div></div>', unsafe_allow_html=True)
+else:
+    k1.markdown('<div class="card"><div class="lab">Today\'s pattern</div><div class="big">None today</div>'
+                '<div class="small">None of the 10 patterns showed up on the latest day.</div></div>',
+                unsafe_allow_html=True)
+if plans:
+    top = plans[0]
+    cls, lab = ("take", "✓ Would act") if top["decision"] == "TAKE" else ("pass", "✕ Would pass")
+    short = (f"Gain is {top['r']:.2f}× the risk; rules need {MIN_R}×" if "reward:risk" in top["reason"]
+             else f"{top['confidence']} signs line up" if top["decision"] == "TAKE"
+             else f"Needs {MIN_CONFIDENCE}+ signs" if top["confidence"] < MIN_CONFIDENCE else "No sensible exit prices")
+    k2.markdown(f'<div class="card"><div class="lab">Would the rules act? '
+                f'{tip("We test every pattern against one fixed set of trading rules. " + esc(plain_reason(top, currency)) + " This shows how those rules behave; it is not a recommendation.")}</div>'
+                f'<span class="pillv {cls}">{lab}</span><div class="small">{esc(short)}</div></div>',
+                unsafe_allow_html=True)
+else:
+    k2.markdown('<div class="card"><div class="lab">Would the rules act?</div><span class="pillv none">— No setup</span>'
+                '<div class="small">No pattern, so nothing to act on.</div></div>', unsafe_allow_html=True)
+tech, bow = str(context["technical"]), str(context["bow_tie"])
+mood = []
+if trend in TREND_TEXT:
+    mood.append(f"<b>Trend {esc(trend.replace('_', ' ').lower())}:</b> {esc(TREND_TEXT[trend])}.")
+if tech in POSITION_TEXT:
+    mood.append(f"<b>{esc(tech.title())}:</b> {esc(POSITION_TEXT[tech])}.")
+if bow in BOWTIE_TEXT:
+    mood.append(f"<b>Bow tie:</b> {esc(BOWTIE_TEXT[bow])}.")
+t_arrow = "↑" if "UP" in trend else "↓" if "DOWN" in trend else "→"
+k3.markdown(f'<div class="card"><div class="lab">Market mood {tip("<br><br>".join(mood))}</div><div class="chips">'
+            f'<span class="chip">Trend {t_arrow}</span><span class="chip">{esc(tech.title())} vs averages</span>'
+            f'<span class="chip">{"No bow tie" if bow == "none" else "Bow tie " + esc(bow.lower())}</span></div></div>',
+            unsafe_allow_html=True)
 
-for tab, pattern in zip(tabs, firing):
-    with tab:
-        occ_all = hist[hist["pattern"] == pattern].sort_values("date")
-        direction = occ_all["direction"].iloc[0]
-        rule_key = occ_all["rule"].iloc[0]
-        past = occ_all[occ_all["date"] < last_date]
-        n_past = len(past)
+# ── Detail for one pattern: trade example + chart ───────────────────────────
+pattern = None
+if firing:
+    st.write("")
+    if len(firing) > 1:
+        with st.container(key="pick"):
+            pattern = st.segmented_control("Pattern", firing, default=firing[0], format_func=pattern_name,
+                                           key="pattern") or firing[0]
+    else:
+        pattern = firing[0]
+    occ_all = hist[hist["pattern"] == pattern].sort_values("date")
+    direction = occ_all["direction"].iloc[0]
+    past = occ_all[occ_all["date"] < last_date]
+    n_past = len(past)
+    d1, d2 = st.columns([1, 1.6])
+    pl = plan_by_pattern.get(pattern)
+    with d1:
+        if pl:
+            ind_n = len(split_factors(pattern, pl["factors"])[1])
+            bet = "falls (a 'short')" if pl["direction"] == "SHORT" else "rises (a 'long')"
+            risk, reward = abs(pl["entry"] - pl["stop"]), abs(pl["target"] - pl["entry"])
+            st.markdown(
+                f'<div class="card"><div class="lab">Trade example · not advice '
+                + tip(f"To make the pattern easier to picture: what a trade could look like if someone followed these "
+                      f"rules exactly, betting the price {bet}. <b>Entry</b> is where it would start, <b>Stop</b> where it "
+                      "would get out to keep a loss small, <b>Target</b> where it would take its gain. An example for "
+                      "learning, not a suggestion to trade.") + '</div>'
+                + ladder(pl)
+                + '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:12px;flex-wrap:wrap">'
+                f'<div><div class="lab" style="margin:0">Reward : risk '
+                + tip(f"Possible gain ÷ possible loss: risking {currency}{risk:,.2f} per share to possibly gain "
+                      f"{currency}{reward:,.2f}. The rules want {MIN_R}× or more.")
+                + f'</div><div class="num">{pl["r"]:.2f}×</div></div>'
+                f'<div><div class="lab" style="margin:0">Confidence '
+                + tip(confidence_html(pattern, pl["factors"], pl["confidence"]))
+                + f'</div><div style="margin-top:6px">{conf_dots(min(ind_n, pl["confidence"]), pl["confidence"])}</div>'
+                f'<div class="small" style="margin-top:2px;font-size:.75rem">{pl["confidence"]}/5 · {ind_n} independent</div>'
+                '</div></div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="card"><div class="lab">Trade example</div><div class="small">No trade levels for '
+                        'this pattern today.</div></div>', unsafe_allow_html=True)
+    with d2:
+        with st.container(key="chartcard", border=False):
+            st.markdown(f'<div class="lab" style="margin:0 0 4px">25 years of {esc(ticker)} · every time this pattern '
+                        'showed up ' + tip("Grey line: the price, adjusted for splits and dividends. Each dot is a past "
+                                           "day this pattern showed up. Green: over the next month the price moved the "
+                                           "way the pattern pointed. Red: it moved the other way. Tap a dot for details.")
+                        + '</div>', unsafe_allow_html=True)
+            chart_px = prices[["close"]].reset_index().rename(columns={"ts": "date"})
+            accent = THEMES[market][0]
+            line = alt.Chart(chart_px).mark_area(
+                line={"color": "#8B86C9", "strokeWidth": 1.4}, color=alt.Gradient(
+                    gradient="linear", stops=[alt.GradientStop(color="#ECEAFE", offset=0),
+                                              alt.GradientStop(color="#FFFFFF", offset=1)], x1=1, x2=1, y1=1, y2=0)
+            ).encode(x=alt.X("date:T", title=None), y=alt.Y("close:Q", title=None, scale=alt.Scale(zero=False)))
+            marks = occ_all[["date", "close", "ret_20d"]].copy()
+            marks["After 1 month"] = ["Not known yet" if pd.isna(x) else ("Went its way" if x > 0 else "Went against")
+                                      for x in directional(marks["ret_20d"], direction)]
+            marks["Move"] = [pct(x) for x in marks["ret_20d"]]
+            pts = alt.Chart(marks).mark_circle(size=55, stroke="white", strokeWidth=1.2, opacity=1).encode(
+                x="date:T", y="close:Q",
+                color=alt.Color("After 1 month:N", legend=None, scale=alt.Scale(
+                    domain=["Went its way", "Went against", "Not known yet"], range=["#12B886", "#FF6B6B", accent])),
+                tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("close:Q", format=",.2f", title="Price"),
+                         alt.Tooltip("Move", title="1-month move"), "After 1 month"])
+            st.altair_chart((line + pts).properties(height=230).configure_view(strokeWidth=0)
+                            .configure_axis(grid=False, labelColor="#6B6A8A", domain=False, tickColor="#E4E1FB",
+                                            labelFont="Inter"), width="stretch")
+            st.markdown('<div class="legend"><span><i style="background:var(--up)"></i>went its way</span>'
+                        '<span><i style="background:var(--down)"></i>went against</span>'
+                        f'<span><i style="background:{accent}"></i>not known yet</span></div>', unsafe_allow_html=True)
 
-        h1, h2 = st.columns([5, 1], vertical_alignment="center")
-        h1.markdown(f"**{RULE_NAME[rule_key]}** ({friendly(pattern)}). {RULE_DESC[rule_key]}")
-        h2.markdown(f'<div style="text-align:right"><span class="tph-tag {direction}">'
-                    f'{"📈 Points up" if direction == "LONG" else "📉 Points down"}</span></div>',
-                    unsafe_allow_html=True)
-        own, indep = split_factors(pattern, today[today["pattern"] == pattern]["factors"].iloc[0])
-        st.caption(f"**Supporting signs today ({len(indep)}):** " + (", ".join(indep) or "none")
-                   + ". These are extra clues that agree with the pattern; more signs usually means a stronger "
-                     "setup.  \n**Part of the pattern itself:** " + (", ".join(own) or "none")
-                   + ". These just describe the pattern, so they don't count as extra evidence.")
+# ── Fold-out details ────────────────────────────────────────────────────────
+st.write("")
+if pattern is not None and n_past:
+    with st.expander(f"Results by time ahead · {pattern_name(pattern)}"):
+        stats = rule_stats(past, direction)
+        st.dataframe(pd.DataFrame({
+            "Looking ahead": [HZ[s.horizon] for s in stats], "Cases": [s.sample for s in stats],
+            "Pattern was right": [share(s.win_rate) for s in stats], "Average": [pct(s.average) for s in stats],
+            "Typical": [pct(s.median) for s in stats], "Worst": [pct(s.worst) for s in stats],
+            "Best": [pct(s.best) for s in stats]}), hide_index=True, width="stretch")
+        st.caption("Measured in the pattern's direction: for a pattern that points down, a price drop shows as positive.")
+    with st.expander(f"Every past case ({n_past})"):
+        table = past.sort_values("date", ascending=False)
+        res = directional(table["ret_20d"], direction)
+        st.dataframe(pd.DataFrame({
+            "Date": table["date"].dt.strftime("%Y-%m-%d"), "Price": table["close"].map(lambda v: f"{v:,.2f}"),
+            **{f"After {HZ[h]}": table[f"ret_{h}d"].map(pct) for h in HORIZONS},
+            "After 1 month": ["Not known yet" if pd.isna(x) else ("✅ Its way" if x > 0 else "❌ Against") for x in res],
+        }), hide_index=True, width="stretch", height=min(38 + 35 * n_past, 380))
 
-        c_left, c_right = st.columns(2, gap="large")
-        with c_left:
-            pl = plan_by_pattern.get(pattern)
-            if pl:
-                risk, reward = abs(pl["entry"] - pl["stop"]), abs(pl["target"] - pl["entry"])
-                bet = ("a bet that the price <b>falls</b> (a 'short' trade): it would gain if the price drops"
-                       if pl["direction"] == "SHORT" else
-                       "a bet that the price <b>rises</b> (a 'long' trade): it would gain if the price goes up")
-                st.markdown('<div class="tph-label">If a trade were taken, it could look like this</div>',
-                            unsafe_allow_html=True)
-                st.markdown(f'<div class="tph-hyp">To make this pattern easier to picture, here is what a trade '
-                            f'based on it could look like if someone followed these rules exactly. It would be {bet}. '
-                            '<b>Entry</b> is where it would start, <b>Stop</b> is where it would get out to keep a '
-                            'loss small, and <b>Target</b> is where it would take its gain. This is an example for '
-                            'learning, not a suggestion to trade.</div>', unsafe_allow_html=True)
-                tiles([
-                    tile(f"{pl['entry']:,.2f}", "Entry", "Price where the trade would start"),
-                    tile(f"{pl['stop']:,.2f}", "Stop", "Exit here to cap the loss if it goes wrong"),
-                    tile(f"{pl['target']:,.2f}", "Target", "Exit here to take the gain if it goes right"),
-                ])
-                ind_n = len(split_factors(pattern, pl["factors"])[1])
-                tiles([
-                    tile(f"{pl['r']:.2f}×", "Reward : risk",
-                         f"Possible gain ÷ possible loss: risking {currency}{risk:,.2f} to possibly gain "
-                         f"{currency}{reward:,.2f} per share. The rules want {MIN_R}× or more."),
-                    tile(f"{pl['confidence']}/5", "Confidence",
-                         f"Clues these rules noted (max 5). {ind_n} of them are independent signs; "
-                         "see the breakdown below."),
-                ], cols=2)
-                st.markdown(confidence_html(pattern, pl["factors"], pl["confidence"]), unsafe_allow_html=True)
-                msg = "**Would these rules act on it?** " + plain_reason(pl, currency)
-                (st.success if pl["decision"] == "TAKE" else st.warning if pl["decision"] == "SKIP" else st.info)(msg)
-            else:
-                st.info("These rules didn't work out trade levels for this pattern today.")
-
-        with c_right:
-            if n_past:
-                st.markdown('<div class="tph-label">Every past time, on the price chart</div>', unsafe_allow_html=True)
-                chart_px = prices[["close"]].reset_index().rename(columns={"ts": "date"})
-                line = alt.Chart(chart_px).mark_line(strokeWidth=1, color="#9AAEB1").encode(
-                    x=alt.X("date:T", title=None),
-                    y=alt.Y("close:Q", title=f"Price ({currency})", scale=alt.Scale(zero=False)),
-                )
-                marks = occ_all[["date", "close", "ret_20d"]].copy()
-                marks["After 1 month"] = [
-                    "Not known yet" if pd.isna(x) else ("Went the pattern's way" if x > 0 else "Went the other way")
-                    for x in directional(marks["ret_20d"], direction)
-                ]
-                marks["1-month move"] = [pct(x) for x in marks["ret_20d"]]
-                pts = alt.Chart(marks).mark_point(filled=True, size=45).encode(
-                    x="date:T", y="close:Q",
-                    color=alt.Color("After 1 month:N", legend=alt.Legend(orient="bottom", title=None),
-                                    scale=alt.Scale(domain=["Went the pattern's way", "Went the other way",
-                                                            "Not known yet"],
-                                                    range=["#2E8B62", "#B8574B", "#2F7F86"])),
-                    tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("close:Q", format=",.2f", title="Price"),
-                             "1-month move", "After 1 month"],
-                )
-                st.altair_chart((line + pts).properties(height=240), width="stretch")
-                st.caption(f"The grey line is {ticker}'s price over ~25 years (adjusted for splits and dividends). "
-                           "Each dot is a day this pattern showed up. Green: over the next month the price moved the "
-                           "way the pattern pointed. Red: it moved the other way. Tap or hover a dot for details.")
-
-        st.markdown(f'<div class="tph-label">How this pattern played out on {esc(ticker)} ({n_past} past cases)'
-                    '</div>', unsafe_allow_html=True)
-        if n_past < SMALL_SAMPLE:
-            st.warning(f"This pattern showed up only {n_past} time(s) before on {ticker}: too few to read much into.")
-        if n_past:
-            stats = rule_stats(past, direction)
-            st.dataframe(pd.DataFrame({
-                "Looking ahead": [HZ[s.horizon] for s in stats],
-                "Cases": [s.sample for s in stats],
-                "Pattern was right": [share(s.win_rate) for s in stats],
-                "Average result": [pct(s.average) for s in stats],
-                "Typical (median)": [pct(s.median) for s in stats],
-                "Worst": [pct(s.worst) for s in stats],
-                "Best": [pct(s.best) for s in stats],
-            }), hide_index=True, width="stretch")
-            st.caption("How to read this: **Pattern was right** is how often the price moved the way the pattern "
-                       "pointed. **Average** and **Typical** are the usual result; **Worst** and **Best** are the "
-                       "extremes. Results are measured in the pattern's direction, so for a pattern that points "
-                       "down, a price drop shows as a positive number.")
-
-            table = past.sort_values("date", ascending=False)
-            res = directional(table["ret_20d"], direction)
-            with st.expander(f"See every past case ({n_past}); {(res <= 0).sum()} went the other way after 1 month"):
-                st.caption("Each row is a past day this pattern showed up. The columns show how much the price "
-                           "actually changed afterwards (plain price change, up is positive).")
-                st.dataframe(pd.DataFrame({
-                    "Date": table["date"].dt.strftime("%Y-%m-%d"),
-                    "Price": table["close"].map(lambda v: f"{v:,.2f}"),
-                    **{f"After {HZ[h]}": table[f"ret_{h}d"].map(pct) for h in HORIZONS},
-                    "After 1 month": ["Not known yet" if pd.isna(x) else ("✅ Pattern's way" if x > 0 else "❌ Other way")
-                                      for x in res],
-                }), hide_index=True, width="stretch", height=min(38 + 35 * n_past, 380))
-
-# ── All patterns ────────────────────────────────────────────────────────────
 rows = []
 for key, name, desc in RULES:
     fired_today = today[today["rule"] == key]
     past_n = int(((hist["rule"] == key) & (hist["date"] < last_date)).sum())
-    if fired_today.empty:
-        status = "— Not today"
-    else:
-        status = " / ".join("✅ Found, points up" if d == "LONG" else "✅ Found, points down"
-                            for d in dict.fromkeys(fired_today["direction"]))
-    rows.append({"Pattern": name, "Today": status, "Times seen in ~25 yrs": past_n, "What it looks for": desc})
+    status = "—" if fired_today.empty else " / ".join(
+        "✅ up" if d == "LONG" else "✅ down" for d in dict.fromkeys(fired_today["direction"]))
+    rows.append({"Pattern": name, "Today": status, "Seen in ~25 yrs": past_n, "What it looks for": desc})
 checked = pd.DataFrame(rows)
-
-with tabs[-2]:
-    st.markdown(f"We check the same **10 chart patterns** on every stock, every day. Here is which ones showed up "
-                f"on {ticker} today, and how often each one has shown up on {ticker} in the past.")
+with st.expander(f"All 10 patterns checked · {today['rule'].nunique()} today"):
     st.dataframe(checked, hide_index=True, width="stretch",
                  column_config={"What it looks for": st.column_config.TextColumn(width="large")})
-    st.caption(f"{today['rule'].nunique()} of 10 patterns showed up on the latest day. A pattern only counts when at "
-               "least 2 of its signs agree.")
 
-# ── Download ────────────────────────────────────────────────────────────────
-evidence = hist[hist["pattern"].isin(firing)] if firing else hist
-evidence = evidence.copy()
+evidence = (hist[hist["pattern"].isin(firing)] if firing else hist).copy()
 evidence.insert(0, "ticker", ticker)
 evidence["rule"] = evidence["rule"].map(RULE_NAME)
 evidence["date"] = evidence["date"].dt.strftime("%Y-%m-%d")
-summary_rows = []
-for h in HORIZONS:
-    oh = outlook(hist, last_date, h)
-    summary_rows.append({
-        "Looking ahead": HZ_LONG[h],
-        "Outlook": "No pattern today" if oh["status"] == "unknown" else "From past cases",
-        "Went up %": None if pd.isna(oh["bullish"]) else round(oh["bullish"] * 100, 1),
-        "Went down %": None if pd.isna(oh["bearish"]) else round(oh["bearish"] * 100, 1),
-        "Past cases": oh["sample"],
-        "How it is calculated": method_text(ticker, h, oh),
-    })
-with tabs[-1]:
+with st.expander("Download Excel / CSV"):
+    summary_rows = []
+    for h in HORIZONS:
+        oh = outlook(hist, last_date, h)
+        summary_rows.append({
+            "Looking ahead": HZ_LONG[h],
+            "Went up %": None if pd.isna(oh["bullish"]) else round(oh["bullish"] * 100, 1),
+            "Went down %": None if pd.isna(oh["bearish"]) else round(oh["bearish"] * 100, 1),
+            "Past cases": oh["sample"], "How it is calculated": method_text(ticker, h, oh)})
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
-        pd.DataFrame({
-            "Field": ["Company", "Ticker", "Market", "Latest day", "Patterns found today", "Disclaimer"],
-            "Value": [company, ticker, MARKETS[market]["label"], f"{last_date:%Y-%m-%d}",
-                      ", ".join(pattern_name(p) for p in firing) or "None", DISCLAIMER],
-        }).to_excel(xw, sheet_name="Summary", index=False)
+        pd.DataFrame({"Field": ["Company", "Ticker", "Market", "Latest day", "Patterns found today", "Disclaimer"],
+                      "Value": [company, ticker, MARKETS[market]["label"], f"{last_date:%Y-%m-%d}",
+                                ", ".join(pattern_name(p) for p in firing) or "None", DISCLAIMER]}
+                     ).to_excel(xw, sheet_name="Summary", index=False)
         pd.DataFrame(summary_rows).to_excel(xw, sheet_name="What happened before", index=False)
         checked.to_excel(xw, sheet_name="Patterns checked", index=False)
         evidence.to_excel(xw, sheet_name="Past cases", index=False)
-    st.markdown("Download everything behind the numbers on this page: what happened before at every time horizon, "
-                "how it is calculated, every pattern checked, and every past case, so you can check it yourself.")
-    d1, d2, _ = st.columns([1, 1, 2])
-    d1.download_button(
-        "⬇ Excel (all evidence)", buf.getvalue(),
-        file_name=f"{ticker}_pattern_evidence_{last_date:%Y%m%d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch",
-    )
-    d2.download_button(
-        "⬇ CSV (past cases)", evidence.to_csv(index=False).encode(),
-        file_name=f"{ticker}_past_cases_{last_date:%Y%m%d}.csv", mime="text/csv", width="stretch",
-    )
+    e1, e2, _ = st.columns([1, 1, 2])
+    e1.download_button("⬇ Excel", buf.getvalue(), file_name=f"{ticker}_pattern_evidence_{last_date:%Y%m%d}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch")
+    e2.download_button("⬇ CSV", evidence.to_csv(index=False).encode(),
+                       file_name=f"{ticker}_past_cases_{last_date:%Y%m%d}.csv", mime="text/csv", width="stretch")
 
 footer()
