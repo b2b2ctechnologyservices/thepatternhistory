@@ -107,3 +107,12 @@ def test_scan_all_builds_every_timeframe():
     assert r["weekly"].bars.index.is_monotonic_increasing
     assert "meets_rules" in r["daily"].hist.columns
     assert "ret_12m" in r["monthly"].hist.columns
+
+
+def test_partial_first_year_is_not_compared():
+    from pattern_history.multi import first_year_is_partial
+    assert not first_year_is_partial(pd.Timestamp("2000-01-03"))
+    assert first_year_is_partial(pd.Timestamp("1980-12-12"))
+    r = scan_all(_daily(start="2000-06-01", periods=1500))
+    assert r["yearly"].bars.index[0].year == 2001
+    assert r["yearly"].hist["date"].min().year == 2002

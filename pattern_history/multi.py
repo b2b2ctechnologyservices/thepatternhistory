@@ -37,6 +37,11 @@ def _patterns(bars: pd.DataFrame, tf: Timeframe, bigger: pd.Series | None) -> pd
     return doc_rules.annotate(bars, both, bigger)
 
 
+def first_year_is_partial(first_day: pd.Timestamp) -> bool:
+    """True if the price history starts after the first week of its calendar year (holidays allowed)."""
+    return first_day > pd.Timestamp(first_day.year, 1, 1) + pd.Timedelta(days=7)
+
+
 def scan_all(daily_full: pd.DataFrame, only: tuple[str, ...] = tuple(TIMEFRAMES)) -> dict[str, TimeframeResult]:
     cutoff = daily_full.index[-1] - pd.DateOffset(years=DAILY_YEARS)
     daily = daily_full[daily_full.index >= cutoff]
@@ -51,6 +56,8 @@ def scan_all(daily_full: pd.DataFrame, only: tuple[str, ...] = tuple(TIMEFRAMES)
         out["monthly"] = TimeframeResult(MONTHLY, monthly, _patterns(monthly, MONTHLY, None))
     if "yearly" in only:
         years = bars_for(daily_full, YEARLY)
+        if first_year_is_partial(daily_full.index[0]):
+            years = years.iloc[1:]  # a stub first year isn't a fair "last year" to compare with
         partial = not is_complete(daily_full.index[-1], "Y")
         out["yearly"] = TimeframeResult(YEARLY, years, yearly.replay_yearly(years, partial), partial)
     return out
