@@ -91,14 +91,22 @@ def candidates_on_bar(d: pd.DataFrame, min_confidence: int = rules.MIN_FACTORS) 
     return out
 
 
-def replay(df: pd.DataFrame, min_confidence: int = rules.MIN_FACTORS) -> pd.DataFrame:
+def replay(
+    df: pd.DataFrame,
+    min_confidence: int = rules.MIN_FACTORS,
+    horizons: tuple[int, ...] = HORIZONS,
+    suffix: str = "d",
+    start: int = rules.MIN_BARS,
+) -> pd.DataFrame:
     """
-    Evaluate every day in `df` that has enough history (rules.MIN_BARS).
-    Returns one row per (date, firing pattern) with entry price, direction,
-    confidence, factors and forward returns over HORIZONS trading days.
+    Evaluate every bar in `df` that has enough history (`start` bars; daily
+    uses rules.MIN_BARS like scan() does). Returns one row per (date, firing
+    pattern) with entry price, direction, confidence, factors and forward
+    returns over `horizons` bars, in columns ret_{h}{suffix} (e.g. ret_20d for
+    daily bars, ret_4w for weekly bars).
     """
-    cols = ["date", "rule", "pattern", "direction", "confidence", "close", "factors"] + [f"ret_{h}d" for h in HORIZONS]
-    if len(df) < rules.MIN_BARS:
+    cols = ["date", "rule", "pattern", "direction", "confidence", "close", "factors"] + [f"ret_{h}{suffix}" for h in horizons]
+    if len(df) < start:
         return pd.DataFrame(columns=cols)
 
     d = rules._add_indicators(df)
@@ -107,15 +115,15 @@ def replay(df: pd.DataFrame, min_confidence: int = rules.MIN_FACTORS) -> pd.Data
     rows: list[dict] = []
 
     with _memoized_trend() as trend_cache:
-        for i in range(rules.MIN_BARS - 1, n):
+        for i in range(start - 1, n):
             trend_cache.clear()
             window = d.iloc[max(0, i - _WINDOW + 1): i + 1]
-            rows.extend(_rows_for_bar(d, i, window, closes, n, min_confidence))
+            rows.extend(_rows_for_bar(d, i, window, closes, n, min_confidence, horizons, suffix))
 
     return pd.DataFrame(rows, columns=cols)
 
 
-def _rows_for_bar(d, i, window, closes, n, min_confidence) -> list[dict]:
+def _rows_for_bar(d, i, window, closes, n, min_confidence, horizons=HORIZONS, suffix="d") -> list[dict]:
     rows = []
     for c in candidates_on_bar(window, min_confidence):
         row = {
@@ -127,9 +135,9 @@ def _rows_for_bar(d, i, window, closes, n, min_confidence) -> list[dict]:
             "close": closes[i],
             "factors": ", ".join(sorted(set(c["factors"]))),
         }
-        for h in HORIZONS:
+        for h in horizons:
             j = i + h
-            row[f"ret_{h}d"] = closes[j] / closes[i] - 1.0 if j < n else np.nan
+            row[f"ret_{h}{suffix}"] = closes[j] / closes[i] - 1.0 if j < n else np.nan
         rows.append(row)
     return rows
 
@@ -150,15 +158,16 @@ def directional(returns: pd.Series, direction: str) -> pd.Series:
     return -returns if direction == "SHORT" else returns
 
 
-def rule_stats(occurrences: pd.DataFrame, direction: str) -> list[HorizonStats]:
+def rule_stats(occurrences: pd.DataFrame, direction: str,
+               horizons: tuple[int, ...] = HORIZONS, suffix: str = "d") -> list[HorizonStats]:
     """
     Stats per horizon for one rule's past occurrences. A "win" means the price
     moved in the rule's direction (up for LONG, down for SHORT). Averages,
     median and worst are in the rule's direction too.
     """
     stats = []
-    for h in HORIZONS:
-        r = directional(occurrences[f"ret_{h}d"].dropna(), direction)
+    for h in horizons:
+        r = directional(occurrences[f"ret_{h}{suffix}"].dropna(), direction)
         if r.empty:
             stats.append(HorizonStats(h, 0, np.nan, np.nan, np.nan, np.nan, np.nan))
             continue
@@ -176,7 +185,7 @@ def rule_stats(occurrences: pd.DataFrame, direction: str) -> list[HorizonStats]:
     return stats
 
 
-def outlook(hist: pd.DataFrame, last_date, horizon: int) -> dict:
+def outlook(hist: pd.DataFrame, last_date, horizon: int, suffix: str = "d") -> dict:
     """
     Bullish / bearish / unknown outlook for the latest bar.
 
@@ -192,7 +201,7 @@ def outlook(hist: pd.DataFrame, last_date, horizon: int) -> dict:
     if not patterns:
         return {"status": "unknown", "patterns": [], "sample": 0,
                 "bullish": float("nan"), "bearish": float("nan"), "horizon": horizon}
-    col = f"ret_{horizon}d"
+    col = f"ret_{horizon}{suffix}"
     past = hist[(hist["pattern"].isin(patterns)) & (hist["date"] < last_date)].dropna(subset=[col])
     by_day = past.groupby("date")[col].first()  # same day -> same price outcome
     n = int(len(by_day))

@@ -1,4 +1,5 @@
-"""Plain-English names and descriptions for each rule (detector) in rules.py."""
+"""Plain-English names and descriptions for each rule: the detectors in rules.py, the rule-document
+patterns in doc_rules.py, and the yearly checks."""
 
 RULES = [
     ("_detect_inside_bar", "Inside bar",
@@ -22,6 +23,34 @@ RULES = [
     ("_detect_wide_range_reversal", "Climax bar",
      "A huge candle on heavy volume late in a trend: bets the move is exhausted."),
 ]
+
+# Patterns from the rule document (pattern_history/doc_rules.py).
+DOC_RULES = [
+    ("doc_major_ma", "Major average test",
+     "After a big move away, the price comes back and touches its 50, 100 or 200-bar average for the first "
+     "time, and holds there: a level that often stops a move."),
+    ("doc_first_pullback_20", "First pullback to the 20",
+     "In a clear trend, the price had pulled well away from its 20-bar average and now comes back to touch it "
+     "for the first time (called 'drop and pop' going up, 'tag and tank' going down)."),
+    ("doc_bow_tie", "Bow tie",
+     "The 20 and 50-bar averages are meeting, and the price reaches that spot coming from a big move: "
+     "a level where the move can stall."),
+]
+RULES = RULES + DOC_RULES
+
+# Yearly checks (pattern_history/yearly.py), keyed by pattern code.
+YEARLY_CHECKS = [
+    ("YEAR_INSIDE", "Inside last year's range",
+     "The year's highest and lowest prices both stayed inside last year's range: a quiet year."),
+    ("YEAR_ABOVE_HIGH", "Above last year's high",
+     "The year closed above the highest price of the year before."),
+    ("YEAR_BELOW_LOW", "Below last year's low",
+     "The year closed below the lowest price of the year before."),
+    ("YEAR_UP", "Up year", "The year closed above the price it opened the year at."),
+    ("YEAR_DOWN", "Down year", "The year closed below the price it opened the year at."),
+]
+YEARLY_NAME = {k: n for k, n, _ in YEARLY_CHECKS}
+YEARLY_DESC = {k: d for k, _, d in YEARLY_CHECKS}
 
 RULE_NAME = {k: name for k, name, _ in RULES}
 RULE_DESC = {k: desc for k, _, desc in RULES}
