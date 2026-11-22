@@ -42,15 +42,17 @@ TREND_TEXT = {
     "NEUTRAL": "no clear up or down direction lately",
 }
 POSITION_TEXT = {
-    "STRONG": "the price is above most of its average prices of the last 20, 50, 100 and 200 days, a sign of strength",
-    "WEAK": "the price is below most of its average prices of the last 20, 50, 100 and 200 days, a sign of weakness",
-    "MIXED": "the price is above some of its 20/50/100/200-day average prices and below others",
+    "STRONG": "the price is above its 20-day average price, which is above its 50-day average, a sign of strength",
+    "WEAK": "the price is below its 50-day average price, a sign of weakness",
+    "MIXED": "the price is neither clearly above nor below its 20- and 50-day average prices",
 }
 BOWTIE_TEXT = {
-    "none": "no 'bow tie' right now (that's when the short- and long-term averages bunch up and then fan out, "
-            "often at the start of a new trend)",
-    "BULL": "the short- and long-term averages have bunched up and fanned out upward, often seen at the start of a rise",
-    "BEAR": "the short- and long-term averages have bunched up and fanned out downward, often seen at the start of a fall",
+    "none": "no 'bow tie' right now (that's when the 20-day and 50-day average prices cross, or close in fast "
+            "on each other, which can come before a change of direction)",
+    "BULL": "the 20-day average price has just crossed above the 50-day one, or is rising fast toward it, "
+            "which can come before a rise",
+    "BEAR": "the 20-day average price has just crossed below the 50-day one, or is falling fast toward it, "
+            "which can come before a fall",
 }
 
 ASSETS = Path(__file__).resolve().parent / "assets"
